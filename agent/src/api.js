@@ -17,6 +17,18 @@ import { createBackup, deleteBackup, listBackups, restoreBackup } from './backup
 import { audit, listAudit, listSamples, listSamplesRange } from './db.js';
 import { sendDiscord } from './discord.js';
 import { scanInstall } from './discover.js';
+import {
+  deletePlugin,
+  detectLoadedPlugins,
+  installOrUpdateOxide,
+  installPluginFromUmod,
+  isOxideInstalled,
+  listPlugins,
+  oxideStatus,
+  readPluginConfig,
+  savePluginContent,
+  writePluginConfig,
+} from './oxide.js';
 
 const SAMPLE_RANGES = { '24h': 24, '7d': 24 * 7, '30d': 24 * 30 };
 const MAX_POINTS = 400;
@@ -90,7 +102,7 @@ export function createApi({ secureCookies = false, version = '0.1.0' } = {}) {
     }
     next();
   };
-  router.use(['/servers/:id/config', '/servers/:id/backups'], localOnly);
+  router.use(['/servers/:id/config', '/servers/:id/backups', '/servers/:id/oxide'], localOnly);
 
   router.get('/discover', (req, res) => {
     res.json({ defaultInstallDir: detectInstall()?.installDir ?? '' });
@@ -287,6 +299,94 @@ export function createApi({ secureCookies = false, version = '0.1.0' } = {}) {
     const since = until - hours * 60 * 60 * 1000;
     const bucketMs = Math.max(60_000, Math.ceil((until - since) / MAX_POINTS / 60_000) * 60_000);
     res.json({ range, bucketMs, since, until, samples: listSamplesRange(server.id, { since, until, bucketMs }) });
+  });
+
+  router.get('/servers/:id/oxide', async (req, res) => {
+    const server = requireServer(req, res);
+    if (!server) return;
+    const status = oxideStatus(server);
+    res.json(status);
+  });
+
+  router.post('/servers/:id/oxide/install', async (req, res) => {
+    const server = requireServer(req, res);
+    if (!server) return;
+    const runtime = runtimeManager.get(server.id);
+    const state = runtime?.status().state;
+    if (state === 'running' || state === 'starting') {
+      throw new ConflictError('Pare o servidor antes de instalar ou atualizar o Oxide.');
+    }
+    const result = await installOrUpdateOxide(server);
+    audit('oxide_install', { serverId: server.id, detail: result.version, ip: req.ip });
+    res.json({ ...result, installed: isOxideInstalled(server) });
+  });
+
+  router.get('/servers/:id/oxide/plugins', async (req, res) => {
+    const server = requireServer(req, res);
+    if (!server) return;
+    const plugins = listPlugins(server);
+    // Estado "carregado" só faz sentido com o servidor no ar; falha silenciosa fora do ar.
+    let loaded = new Set();
+    const runtime = runtimeManager.get(server.id);
+    if (runtime?.status().state === 'running') loaded = await detectLoadedPlugins(runtime);
+    res.json(plugins.map((plugin) => ({ ...plugin, loaded: loaded.has(plugin.name.toLowerCase()) })));
+  });
+
+  router.post('/servers/:id/oxide/plugins', async (req, res) => {
+    const server = requireServer(req, res);
+    if (!server) return;
+    const url = req.body?.url;
+    const content = req.body?.content;
+    if (url) {
+      const result = await installPluginFromUmod(server, url);
+      audit('oxide_plugin_install', { serverId: server.id, detail: result.url, ip: req.ip });
+      res.status(201).json(result);
+      return;
+    }
+    if (content) {
+      const result = savePluginContent(server, req.body?.name, content);
+      audit('oxide_plugin_upload', { serverId: server.id, detail: result.name, ip: req.ip });
+      res.status(201).json(result);
+      return;
+    }
+    throw new ValidationError('Informe a URL do uMod ou o conteúdo do plugin.');
+  });
+
+  router.delete('/servers/:id/oxide/plugins/:name', (req, res) => {
+    const server = requireServer(req, res);
+    if (!server) return;
+    const result = deletePlugin(server, req.params.name);
+    audit('oxide_plugin_delete', { serverId: server.id, detail: result.name, ip: req.ip });
+    res.json({ ok: true });
+  });
+
+  router.get('/servers/:id/oxide/plugins/:name/config', (req, res) => {
+    const server = requireServer(req, res);
+    if (!server) return;
+    res.json(readPluginConfig(server, req.params.name));
+  });
+
+  router.put('/servers/:id/oxide/plugins/:name/config', (req, res) => {
+    const server = requireServer(req, res);
+    if (!server) return;
+    const result = writePluginConfig(server, req.params.name, req.body?.raw);
+    audit('oxide_plugin_config', { serverId: server.id, detail: req.params.name, ip: req.ip });
+    res.json(result);
+  });
+
+  const PLUGIN_ACTIONS = ['load', 'unload', 'reload'];
+  router.post('/servers/:id/oxide/plugins/:name/:action', async (req, res) => {
+    const server = requireServer(req, res);
+    if (!server) return;
+    if (!PLUGIN_ACTIONS.includes(req.params.action)) {
+      res.status(404).json({ error: 'Ação desconhecida. Use load, unload ou reload.' });
+      return;
+    }
+    const runtime = requireRuntime(req, res);
+    if (!runtime) return;
+    const response = await runtime.command(`oxide.${req.params.action} ${req.params.name}`);
+    audit(`oxide_plugin_${req.params.action}`, { serverId: server.id, detail: req.params.name, ip: req.ip });
+    res.json({ response });
   });
 
   router.get('/audit', (req, res) => {

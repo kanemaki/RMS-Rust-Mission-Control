@@ -353,6 +353,65 @@ legend {
   flex: none;
 }
 
+/* Plugins (Oxide/uMod) */
+.plugin-install {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 14px 0;
+}
+
+.plugin-install input[type='text'] {
+  flex: 1;
+  min-width: 220px;
+}
+
+.plugin-tools {
+  display: flex;
+  gap: 8px;
+  margin: 4px 0 12px;
+}
+
+.plugin-tools input[type='search'] {
+  max-width: 280px;
+}
+
+.plugin-list li {
+  flex-wrap: wrap;
+}
+
+.pill.ok {
+  color: #58d68d;
+}
+
+.pill.off {
+  color: var(--muted);
+}
+
+.plugin-config {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border-soft);
+}
+
+.plugin-config .panel-head > div:last-child {
+  display: flex;
+  gap: 8px;
+}
+
+.plugin-config-editor {
+  width: 100%;
+  min-height: 260px;
+  resize: vertical;
+  padding: 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border-soft);
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--text, inherit);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
 .toggles {
   display: flex;
   gap: 22px;

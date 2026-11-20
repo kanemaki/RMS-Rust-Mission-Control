@@ -68,6 +68,9 @@
       <button type="button" [class.active]="tab() === 'metrics'" (click)="setTab('metrics')">
         {{ 'server.tab.metrics' | t }}
       </button>
+      <button type="button" [class.active]="tab() === 'plugins'" (click)="setTab('plugins')">
+        {{ 'server.tab.plugins' | t }}
+      </button>
       <button type="button" [class.active]="tab() === 'backups'" (click)="setTab('backups')">
         {{ 'server.tab.backups' | t }}
       </button>
@@ -191,6 +194,149 @@
             <summary>{{ config()!.unknown.length }} {{ 'server.preserved' | t }}</summary>
             <pre class="mono">{{ config()!.unknown.join('\n') }}</pre>
           </details>
+        }
+      </section>
+    }
+
+    @case ('plugins') {
+      <section class="panel plugins-panel">
+        <div class="panel-head">
+          <div>
+            <h2>{{ 'server.tab.plugins' | t }}</h2>
+            <p class="muted small mono">{{ oxide()?.pluginsDir }}</p>
+          </div>
+          <button
+            class="btn"
+            type="button"
+            [disabled]="oxideBusy() === 'install' || s.status?.state === 'running' || s.status?.state === 'starting'"
+            (click)="installOxide()"
+          >
+            @if (oxideBusy() === 'install') {
+              <span class="spinner"></span>
+            }
+            {{ (oxide()?.installed ? 'oxide.update' : 'oxide.install') | t }}
+          </button>
+        </div>
+
+        @if (s.status?.state === 'running' || s.status?.state === 'starting') {
+          <p class="hint">{{ 'oxide.stopFirst' | t }}</p>
+        }
+
+        <div class="plugin-install">
+          <input
+            type="text"
+            [placeholder]="'oxide.urlPlaceholder' | t"
+            [ngModel]="newPluginUrl()"
+            (ngModelChange)="newPluginUrl.set($event)"
+            (keydown.enter)="installFromUmod()"
+          />
+          <button
+            class="btn primary"
+            type="button"
+            [disabled]="!newPluginUrl().trim() || oxideBusy() === 'install-plugin'"
+            (click)="installFromUmod()"
+          >
+            @if (oxideBusy() === 'install-plugin') {
+              <span class="spinner"></span>
+            }
+            {{ 'oxide.installFromUmod' | t }}
+          </button>
+          <label class="btn" [class.disabled]="oxideBusy() === 'upload-plugin'">
+            @if (oxideBusy() === 'upload-plugin') {
+              <span class="spinner"></span>
+            }
+            {{ 'oxide.upload' | t }}
+            <input type="file" accept=".cs,text/plain" hidden (change)="onPluginFile($event)" />
+          </label>
+        </div>
+
+        @if (!oxide()?.installed) {
+          <p class="hint">{{ 'oxide.notInstalledHint' | t }}</p>
+        }
+
+        <div class="plugin-tools">
+          <input
+            type="search"
+            [placeholder]="'oxide.filter' | t"
+            [ngModel]="pluginFilter()"
+            (ngModelChange)="pluginFilter.set($event)"
+          />
+        </div>
+
+        @if (!visiblePlugins().length) {
+          <div class="empty">{{ 'oxide.empty' | t }}</div>
+        } @else {
+          <ul class="backup-list plugin-list">
+            @for (plugin of visiblePlugins(); track plugin.name) {
+              <li>
+                <div class="backup-info">
+                  <span class="mono">
+                    {{ plugin.title }}
+                    @if (plugin.version) {
+                      <span class="muted">v{{ plugin.version }}</span>
+                    }
+                  </span>
+                  <span class="muted small">
+                    {{ plugin.author }}
+                    @if (plugin.author && plugin.updatedAt) {
+                      ·
+                    }
+                    {{ date(plugin.updatedAt) }}
+                  </span>
+                  @if (plugin.description) {
+                    <span class="muted small">{{ plugin.description }}</span>
+                  }
+                </div>
+                <div class="backup-actions">
+                  <span class="pill" [class.ok]="plugin.loaded" [class.off]="!plugin.loaded">
+                    {{ (plugin.loaded ? 'oxide.loaded' : 'oxide.unloaded') | t }}
+                  </span>
+                  <button class="btn sm" type="button" [disabled]="!!oxideBusy()" (click)="pluginAction(plugin, 'reload')">
+                    {{ 'oxide.reload' | t }}
+                  </button>
+                  <button class="btn sm" type="button" [disabled]="!!oxideBusy()" (click)="pluginAction(plugin, plugin.loaded ? 'unload' : 'load')">
+                    {{ (plugin.loaded ? 'oxide.unload' : 'oxide.load') | t }}
+                  </button>
+                  <button class="btn sm" type="button" (click)="openPluginConfig(plugin)">
+                    {{ 'oxide.config' | t }}
+                  </button>
+                  <button class="btn sm danger" type="button" [disabled]="oxideBusy() === 'delete:' + plugin.name" (click)="removePlugin(plugin)">
+                    {{ 'common.delete' | t }}
+                  </button>
+                </div>
+              </li>
+            }
+          </ul>
+        }
+        @if (s.status?.state !== 'running') {
+          <p class="hint">{{ 'oxide.loadHint' | t }}</p>
+        }
+
+        @if (editingPlugin()) {
+          <div class="plugin-config">
+            <div class="panel-head">
+              <div>
+                <h3>{{ 'oxide.configTitle' | t }} <span class="mono">{{ editingPlugin() }}</span></h3>
+                <p class="muted small mono">{{ pluginConfigDraft()?.path }}</p>
+              </div>
+              <div>
+                <button class="btn primary" type="button" [disabled]="pluginConfigSaving()" (click)="savePluginConfig()">
+                  @if (pluginConfigSaving()) {
+                    <span class="spinner"></span>
+                  }
+                  {{ 'common.save' | t }}
+                </button>
+                <button class="btn" type="button" (click)="closePluginConfig()">{{ 'common.close' | t }}</button>
+              </div>
+            </div>
+            <textarea
+              class="mono plugin-config-editor"
+              spellcheck="false"
+              [ngModel]="pluginConfigRaw()"
+              (ngModelChange)="pluginConfigRaw.set($event)"
+            ></textarea>
+            <p class="hint">{{ 'oxide.configHint' | t }}</p>
+          </div>
         }
       </section>
     }

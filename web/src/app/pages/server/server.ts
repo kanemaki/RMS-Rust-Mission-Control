@@ -5,11 +5,11 @@ import { Subscription } from 'rxjs';
 import { ApiService } from '../../core/api.service';
 import { readError } from '../../core/auth.service';
 import { EventsService } from '../../core/events.service';
-import { Backup, BackupSchedule, DiscordEvents, ConfigField, LogEntry, SamplesResponse, Sample, Server, ServerConfig, ServerState, WipeSchedule } from '../../core/models';
+import { Backup, BackupSchedule, DiscordEvents, ConfigField, LogEntry, OxidePlugin, OxidePluginConfig, OxideStatus, SamplesResponse, Sample, Server, ServerConfig, ServerState, WipeSchedule } from '../../core/models';
 import { I18nService } from '../../core/i18n.service';
 import { TPipe } from '../../shared/t.pipe';
 
-type Tab = 'console' | 'config' | 'metrics' | 'backups' | 'settings';
+type Tab = 'console' | 'config' | 'metrics' | 'plugins' | 'backups' | 'settings';
 type MetricsRange = '24h' | '7d' | '30d';
 
 interface ChartSeries {
@@ -53,6 +53,16 @@ export class ServerPage implements OnInit, OnDestroy {
   readonly backups = signal<Backup[]>([]);
   readonly backupBusy = signal<string | null>(null);
 
+  readonly oxide = signal<OxideStatus | null>(null);
+  readonly plugins = signal<OxidePlugin[]>([]);
+  readonly oxideBusy = signal<string | null>(null);
+  readonly newPluginUrl = signal('');
+  readonly pluginFilter = signal('');
+  readonly editingPlugin = signal<string | null>(null);
+  readonly pluginConfigDraft = signal<OxidePluginConfig | null>(null);
+  readonly pluginConfigRaw = signal('');
+  readonly pluginConfigSaving = signal(false);
+
   readonly metricsRange = signal<MetricsRange>('24h');
   readonly metrics = signal<SamplesResponse | null>(null);
   readonly metricsLoading = signal(false);
@@ -75,7 +85,7 @@ export class ServerPage implements OnInit, OnDestroy {
     maxPlayers: 50,
     saveInterval: 300,
     startedAt: '',
-    autoUpdate: true,
+    autoUpdate: false,
     autoRestart: true,
     wipeSchedule: { enabled: false, dayOfMonth: 1, time: '04:00', type: 'map', rotateSeed: false } as WipeSchedule,
     backupSchedule: { enabled: false, time: '03:00', keep: 7 } as BackupSchedule,
@@ -160,7 +170,161 @@ export class ServerPage implements OnInit, OnDestroy {
     this.tab.set(tab);
     if (tab === 'config') this.loadConfig();
     if (tab === 'metrics') this.loadMetrics();
+    if (tab === 'plugins') this.loadOxide();
     if (tab === 'backups') this.loadBackups();
+  }
+
+  loadOxide(): void {
+    this.api.oxideStatus(this.id).subscribe({ next: (status) => this.oxide.set(status) });
+    this.api.oxidePlugins(this.id).subscribe({ next: (list) => this.plugins.set(list) });
+  }
+
+  installOxide(): void {
+    const first = !this.oxide()?.installed;
+    const question = first
+      ? this.i18n.t('oxide.confirmInstall')
+      : this.i18n.t('oxide.confirmUpdate');
+    if (!confirm(question)) return;
+    this.oxideBusy.set('install');
+    this.api.installOxide(this.id).subscribe({
+      next: (result) => {
+        this.oxideBusy.set(null);
+        this.oxide.update((current) => (current ? { ...current, installed: result.installed } : current));
+        this.notice.set(this.i18n.t('oxide.installedNotice').replace('{version}', result.version ?? ''));
+        this.loadOxide();
+      },
+      error: (err) => {
+        this.oxideBusy.set(null);
+        this.error.set(readError(err, this.i18n.t('oxide.installFailed')));
+      },
+    });
+  }
+
+  installFromUmod(): void {
+    let url = this.newPluginUrl().trim();
+    if (!url) return;
+    // Aceita só o nome do plugin ou a URL completa.
+    if (!/^https:\/\//i.test(url)) url = `https://umod.org/plugins/${url.replace(/\.cs$/i, '')}.cs`;
+    this.oxideBusy.set('install-plugin');
+    this.api.installPlugin(this.id, url).subscribe({
+      next: (result) => {
+        this.oxideBusy.set(null);
+        this.newPluginUrl.set('');
+        this.notice.set(this.i18n.t('oxide.pluginInstalled').replace('{name}', result.name));
+        this.loadOxide();
+      },
+      error: (err) => {
+        this.oxideBusy.set(null);
+        this.error.set(readError(err, this.i18n.t('oxide.pluginInstallFailed')));
+      },
+    });
+  }
+
+  onPluginFile(event: Event): void {
+    const input = event.target as HTMLInputElement;
+    const file = input.files?.[0];
+    input.value = '';
+    if (!file) return;
+    const stem = file.name.replace(/\.cs$/i, '');
+    file
+      .text()
+      .then((content) => {
+        this.oxideBusy.set('upload-plugin');
+        this.api.uploadPlugin(this.id, stem, content).subscribe({
+          next: (result) => {
+            this.oxideBusy.set(null);
+            this.notice.set(this.i18n.t('oxide.pluginInstalled').replace('{name}', result.name));
+            this.loadOxide();
+          },
+          error: (err) => {
+            this.oxideBusy.set(null);
+            this.error.set(readError(err, this.i18n.t('oxide.pluginInstallFailed')));
+          },
+        });
+      })
+      .catch(() => this.error.set(this.i18n.t('oxide.readFailed')));
+  }
+
+  pluginAction(plugin: OxidePlugin, action: 'load' | 'unload' | 'reload'): void {
+    this.oxideBusy.set(`${action}:${plugin.name}`);
+    this.api.pluginAction(this.id, plugin.name, action).subscribe({
+      next: (result) => {
+        this.oxideBusy.set(null);
+        this.notice.set(`${plugin.name}: ${result.response || this.i18n.t('common.done')}`);
+        this.loadOxide();
+      },
+      error: (err) => {
+        this.oxideBusy.set(null);
+        this.error.set(readError(err, this.i18n.t('oxide.actionFailed')));
+      },
+    });
+  }
+
+  removePlugin(plugin: OxidePlugin): void {
+    if (!confirm(this.i18n.t('oxide.confirmDelete').replace('{name}', plugin.name))) return;
+    this.oxideBusy.set(`delete:${plugin.name}`);
+    this.api.deletePlugin(this.id, plugin.name).subscribe({
+      next: () => {
+        this.oxideBusy.set(null);
+        this.loadOxide();
+      },
+      error: (err) => {
+        this.oxideBusy.set(null);
+        this.error.set(readError(err, this.i18n.t('oxide.deleteFailed')));
+      },
+    });
+  }
+
+  openPluginConfig(plugin: OxidePlugin): void {
+    this.editingPlugin.set(plugin.name);
+    this.pluginConfigSaving.set(true);
+    this.api.pluginConfig(this.id, plugin.name).subscribe({
+      next: (config) => {
+        this.pluginConfigDraft.set(config);
+        this.pluginConfigRaw.set(config.raw);
+        this.pluginConfigSaving.set(false);
+      },
+      error: (err) => {
+        this.editingPlugin.set(null);
+        this.pluginConfigSaving.set(false);
+        this.error.set(readError(err, this.i18n.t('oxide.configFailed')));
+      },
+    });
+  }
+
+  savePluginConfig(): void {
+    const name = this.editingPlugin();
+    if (!name) return;
+    this.pluginConfigSaving.set(true);
+    this.api.savePluginConfig(this.id, name, this.pluginConfigRaw()).subscribe({
+      next: (config) => {
+        this.pluginConfigDraft.set(config);
+        this.pluginConfigRaw.set(config.raw);
+        this.pluginConfigSaving.set(false);
+        this.notice.set(this.i18n.t('oxide.configSaved'));
+      },
+      error: (err) => {
+        this.pluginConfigSaving.set(false);
+        this.error.set(readError(err, this.i18n.t('oxide.configSaveFailed')));
+      },
+    });
+  }
+
+  closePluginConfig(): void {
+    this.editingPlugin.set(null);
+    this.pluginConfigDraft.set(null);
+    this.pluginConfigRaw.set('');
+  }
+
+  visiblePlugins(): OxidePlugin[] {
+    const term = this.pluginFilter().trim().toLowerCase();
+    if (!term) return this.plugins();
+    return this.plugins().filter(
+      (plugin) =>
+        plugin.name.toLowerCase().includes(term) ||
+        plugin.title.toLowerCase().includes(term) ||
+        plugin.author.toLowerCase().includes(term),
+    );
   }
 
   loadMetrics(): void {

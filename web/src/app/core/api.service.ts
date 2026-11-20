@@ -6,6 +6,9 @@ import {
   Backup,
   InstallScan,
   LogEntry,
+  OxidePlugin,
+  OxidePluginConfig,
+  OxideStatus,
   SamplesResponse,
   Server,
   ServerConfig,
@@ -128,5 +131,46 @@ export class ApiService {
 
   audit(limit = 100): Observable<AuditEntry[]> {
     return this.http.get<AuditEntry[]>(`/api/audit?limit=${limit}`);
+  }
+
+  oxideStatus(id: string): Observable<OxideStatus> {
+    return this.http.get<OxideStatus>(`/api/servers/${id}/oxide`);
+  }
+
+  installOxide(id: string): Observable<{ installed: boolean; version: string }> {
+    return this.http.post<{ installed: boolean; version: string }>(`/api/servers/${id}/oxide/install`, {});
+  }
+
+  oxidePlugins(id: string): Observable<OxidePlugin[]> {
+    return this.http.get<OxidePlugin[]>(`/api/servers/${id}/oxide/plugins`);
+  }
+
+  installPlugin(id: string, url: string): Observable<{ name: string; title: string }> {
+    return this.http.post<{ name: string; title: string }>(`/api/servers/${id}/oxide/plugins`, { url });
+  }
+
+  uploadPlugin(id: string, name: string, content: string): Observable<{ name: string; title: string }> {
+    return this.http.post<{ name: string; title: string }>(`/api/servers/${id}/oxide/plugins`, { name, content });
+  }
+
+  deletePlugin(id: string, name: string): Observable<{ ok: true }> {
+    return this.http.delete<{ ok: true }>(`/api/servers/${id}/oxide/plugins/${encodeURIComponent(name)}`);
+  }
+
+  pluginConfig(id: string, name: string): Observable<OxidePluginConfig> {
+    return this.http.get<OxidePluginConfig>(`/api/servers/${id}/oxide/plugins/${encodeURIComponent(name)}/config`);
+  }
+
+  savePluginConfig(id: string, name: string, raw: string): Observable<OxidePluginConfig> {
+    return this.http.put<OxidePluginConfig>(`/api/servers/${id}/oxide/plugins/${encodeURIComponent(name)}/config`, {
+      raw,
+    });
+  }
+
+  pluginAction(id: string, name: string, action: 'load' | 'unload' | 'reload'): Observable<{ response: string }> {
+    return this.http.post<{ response: string }>(
+      `/api/servers/${id}/oxide/plugins/${encodeURIComponent(name)}/${action}`,
+      {},
+    );
   }
 }

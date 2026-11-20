@@ -49,7 +49,7 @@ function defaultServer(detected = detectInstall()) {
     wipeSchedule: { enabled: false, dayOfMonth: 1, time: '04:00', type: 'map', rotateSeed: false },
     backupSchedule: { enabled: false, time: '03:00', keep: 7 },
     discord: defaultDiscord(),
-    autoUpdate: true,
+    autoUpdate: false,
     autoRestart: true,
     extraArgs: [],
   };

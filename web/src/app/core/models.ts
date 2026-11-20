@@ -142,6 +142,30 @@ export interface AuditEntry {
   ip: string | null;
 }
 
+export interface OxideStatus {
+  installed: boolean;
+  pluginCount: number;
+  pluginsDir: string;
+}
+
+export interface OxidePlugin {
+  name: string;
+  title: string;
+  author: string;
+  version: string;
+  description: string;
+  sizeBytes: number;
+  updatedAt: number;
+  hasConfig: boolean;
+  loaded: boolean;
+}
+
+export interface OxidePluginConfig {
+  path: string;
+  exists: boolean;
+  raw: string;
+}
+
 export interface DiscoveredIdentity {
   identity: string;
   configPath: string;

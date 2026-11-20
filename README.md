@@ -108,6 +108,22 @@ exibe gráficos de 24 horas, 7 dias ou 30 dias, com pico, média e valor atual, 
 como referência. Amostras mais antigas que 30 dias são removidas automaticamente. Servidores remotos não
 geram amostras de recursos (os arquivos ficam na máquina de origem).
 
+### Plugins (Oxide/uMod)
+
+Para servidores locais, a aba **Plugins (Oxide)** gerencia o Oxide e seus plugins:
+
+- **Instalar/atualizar o Oxide** — baixa a última release (`Oxide-Rust.zip`) do GitHub e extrai sobre a
+  pasta do servidor. Exige o servidor parado e verifica a presença de `Oxide.Core.dll` ao final.
+- **Lista de plugins** — lê os `.cs` em `Oxide/plugins` e mostra título, autor, versão (do cabeçalho
+  `[Info(...)]`) e se o plugin está carregado (via `oxide.plugins` quando o servidor está online).
+- **Instalar do uMod** — aceita o nome do plugin ou a URL completa; só `https://umod.org/plugins/Nome.cs`
+  é aceito. Também aceita upload de arquivo `.cs`.
+- **Config do plugin** — lê e grava `Oxide/config/<Plugin>.json` com validação de JSON.
+- **Load / unload / reload** — manda `oxide.load`, `oxide.unload` e `oxide.reload` via RCON com o
+  servidor online.
+
+Nomes de plugin são validados contra travessia de caminho, e downloads têm limite de tamanho.
+
 ## API
 
 Todas as rotas exigem sessão, exceto `GET /api/health`, `GET /api/setup` e `POST /api/setup`.
@@ -144,6 +160,15 @@ POST   /api/servers/:id/backups/:name/restore
 DELETE /api/servers/:id/backups/:name
 GET    /api/servers/:id/samples?limit=      últimas N amostras cruas
 GET    /api/servers/:id/samples?range=24h   séries agregadas (24h, 7d ou 30d)
+
+GET    /api/servers/:id/oxide               status do Oxide e contagem de plugins
+POST   /api/servers/:id/oxide/install      instala/atualiza o Oxide (servidor parado)
+GET    /api/servers/:id/oxide/plugins
+POST   /api/servers/:id/oxide/plugins      { url } do uMod ou { name, content }
+DELETE /api/servers/:id/oxide/plugins/:name
+GET    /api/servers/:id/oxide/plugins/:name/config
+PUT    /api/servers/:id/oxide/plugins/:name/config       { raw }
+POST   /api/servers/:id/oxide/plugins/:name/load|unload|reload
 
 GET    /api/audit?limit=
 GET    /api/events                   SSE (status + logs)
@@ -246,8 +271,8 @@ WebSocket falso, ciclo de vida com servidor simulado e um fluxo HTTP completo
 
 ## Roadmap
 
-- **Fase 2:** alertas no Discord, backup automático, métricas históricas
-- **Fase 3:** plugins Oxide/uMod, multi-servidor avançado, 2FA (TOTP), licenciamento
+- **Fase 2:** ~~alertas no Discord, backup automático, métricas históricas~~ ✔
+- **Fase 3:** ~~plugins Oxide/uMod~~ ✔, multi-servidor avançado, 2FA (TOTP), licenciamento
 
 > Projeto independente, não afiliado à Facepunch Studios. Não redistribui binários do jogo:
 > apenas automatiza o SteamCMD.

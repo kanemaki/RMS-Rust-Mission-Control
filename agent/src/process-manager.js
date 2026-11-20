@@ -5,6 +5,7 @@ import { spawn } from 'node:child_process';
 import { RconClient } from './rcon.js';
 import { logBus } from './logbus.js';
 import { updateServerFiles } from './steamcmd.js';
+import { isOxideInstalled, installOrUpdateOxide } from './oxide.js';
 import { serverLogsDir } from './paths.js';
 import { recordSample } from './db.js';
 import { createLineSplitter } from './lines.js';
@@ -206,6 +207,7 @@ export class ServerRuntime {
       throw new ConflictError('Pare o servidor antes de atualizar.');
     }
     const previous = this.state;
+    const hadOxide = isOxideInstalled(this.server);
     this.#setState('updating');
     this.#log('agent', 'Iniciando atualização via SteamCMD (app 258550)...');
     const result = await updateServerFiles(this.server, {
@@ -214,6 +216,15 @@ export class ServerRuntime {
     this.#setState(previous === 'error' ? 'error' : 'stopped');
     if (result.ok) {
       this.#log('agent', 'Atualização concluída.');
+      if (hadOxide) {
+        this.#log('agent', 'Reinstalando o Oxide após a atualização...');
+        try {
+          await installOrUpdateOxide(this.server);
+          this.#log('agent', 'Oxide reinstalado.');
+        } catch (error) {
+          this.#log('agent', `Aviso: falha ao reinstalar o Oxide (${error.message}). Reinstale pela aba Plugins.`);
+        }
+      }
     } else {
       this.lastError = result.error ?? `SteamCMD retornou código ${result.code}`;
       this.#log('agent', `Atualização falhou: ${this.lastError}`);
