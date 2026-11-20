@@ -12,7 +12,7 @@ const execFileAsync = promisify(execFile);
 const NAME_RE = /^[A-Za-z0-9_][A-Za-z0-9_. -]{0,63}$/;
 const UMOD_URL_RE = /^https:\/\/umod\.org\/plugins\/([A-Za-z0-9_-]{1,64})\.cs$/;
 const MAX_PLUGIN_BYTES = 2 * 1024 * 1024; // .cs de plugin: nenhuma chega perto de 2 MB
-const MAX_ZIP_BYTES = 32 * 1024 * 1024; // Oxide-Rust.zip fica em torno de 1 MB comprimido
+const MAX_ZIP_BYTES = 32 * 1024 * 1024; // zip do Oxide fica em torno de 13 MB comprimido
 const UMOD_TIMEOUT_MS = 15_000;
 const RELEASE_TIMEOUT_MS = 30_000;
 const GITHUB_RELEASES = 'https://api.github.com/repos/OxideMod/Oxide.Rust/releases/latest';
@@ -23,6 +23,21 @@ const DESCRIPTION_RE = /\[Description\(\s*"([^"]*)"/;
 
 export function isUmodUrl(url) {
   return UMOD_URL_RE.test(String(url ?? '').trim());
+}
+
+// A uMod publica hoje um zip por plataforma — Oxide.Rust.zip (Windows) e
+// Oxide.Rust-linux.zip (Linux) — e antes usava um único Oxide-Rust.zip.
+// Escolhemos o anexo da plataforma atual, com fallback para os outros nomes;
+// null significa que a release mudou de formato de novo.
+export function pickOxideAsset(assets, platform = process.platform) {
+  const plain = /^Oxide[.-]?Rust\.zip$/i;
+  const linux = /^Oxide[.-]?Rust[.-]?linux\.zip$/i;
+  const order = platform === 'win32' ? [plain, linux] : [linux, plain];
+  for (const pattern of order) {
+    const match = (assets ?? []).find((item) => pattern.test(item?.name ?? ''));
+    if (match) return match;
+  }
+  return null;
 }
 
 export function oxideDir(server) {
@@ -215,8 +230,8 @@ export async function detectLoadedPlugins(runtime) {
 }
 
 /**
- * Instala/atualiza o Oxide baixando o Oxide-Rust.zip da última release
- * e extraindo sobre a pasta do servidor. Exige o servidor parado.
+ * Instala/atualiza o Oxide baixando o zip da última release e extraindo
+ * sobre a pasta do servidor. Exige o servidor parado.
  */
 export async function installOrUpdateOxide(server) {
   let release;
@@ -233,8 +248,13 @@ export async function installOrUpdateOxide(server) {
       `Falha ao consultar a release do Oxide: ${error?.name === 'TimeoutError' ? 'tempo esgotado.' : error.message}`,
     );
   }
-  const asset = (release.assets ?? []).find((item) => /^Oxide-?Rust\.zip$/i.test(item.name ?? ''));
-  if (!asset) throw new ValidationError('Release do Oxide sem o Oxide-Rust.zip. Tente de novo mais tarde.');
+  const asset = pickOxideAsset(release.assets);
+  if (!asset) {
+    const names = (release.assets ?? []).map((item) => item?.name).filter(Boolean).join(', ') || 'nenhum anexo';
+    throw new ValidationError(
+      `Release do Oxide sem o zip esperado (anexos: ${names}). Tente de novo mais tarde.`,
+    );
+  }
   if ((asset.size ?? 0) > MAX_ZIP_BYTES) throw new ValidationError('Oxide-Rust.zip grande demais; download cancelado.');
 
   let response;

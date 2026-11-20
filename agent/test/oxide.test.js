@@ -10,6 +10,7 @@ process.env.RMC_DATA_DIR = dataDir;
 const { ValidationError } = await import('../src/errors.js');
 const {
   isUmodUrl,
+  pickOxideAsset,
   installPluginFromUmod,
   parsePluginHeader,
   savePluginContent,
@@ -108,6 +109,24 @@ test('isUmodUrl e installPluginFromUmod rejeitam endereços fora do uMod sem red
   assert.ok(!isUmodUrl('https://umod.org/plugins/x/../evil.cs'));
   assert.ok(!isUmodUrl(''));
   await assert.rejects(() => installPluginFromUmod({ installDir: dataDir }, 'https://evil.com/plugins/X.cs'), ValidationError);
+});
+
+test('pickOxideAsset aceita o nome novo da release e o legado, escolhendo por plataforma', () => {
+  const current = [
+    { name: 'Oxide.Rust-linux.zip', size: 1 },
+    { name: 'Oxide.Rust.zip', size: 2 },
+  ];
+  // No Windows vem o zip sem -linux; no Linux, o -linux.
+  assert.equal(pickOxideAsset(current, 'win32').name, 'Oxide.Rust.zip');
+  assert.equal(pickOxideAsset(current, 'linux').name, 'Oxide.Rust-linux.zip');
+  // Releases antigas: um único Oxide-Rust.zip serve para qualquer plataforma.
+  const legacy = [{ name: 'Oxide-Rust.zip', size: 3 }];
+  assert.equal(pickOxideAsset(legacy, 'win32').name, 'Oxide-Rust.zip');
+  assert.equal(pickOxideAsset(legacy, 'linux').name, 'Oxide-Rust.zip');
+  // Formato desconhecido (uMod renomeou de novo) devolve null.
+  assert.equal(pickOxideAsset([{ name: 'Oxide-Rust.exe' }], 'win32'), null);
+  assert.equal(pickOxideAsset([], 'win32'), null);
+  assert.equal(pickOxideAsset(undefined, 'win32'), null);
 });
 
 test('oxideStatus informa instalação pela DLL em RustDedicated_Data/Managed', () => {
