@@ -5,7 +5,7 @@ import { Subscription } from 'rxjs';
 import { ApiService } from '../../core/api.service';
 import { readError } from '../../core/auth.service';
 import { EventsService } from '../../core/events.service';
-import { Backup, ConfigField, LogEntry, Server, ServerConfig, ServerState, WipeSchedule } from '../../core/models';
+import { Backup, DiscordEvents, ConfigField, LogEntry, Server, ServerConfig, ServerState, WipeSchedule } from '../../core/models';
 import { I18nService } from '../../core/i18n.service';
 import { TPipe } from '../../shared/t.pipe';
 
@@ -59,6 +59,9 @@ export class ServerPage implements OnInit, OnDestroy {
     autoUpdate: true,
     autoRestart: true,
     wipeSchedule: { enabled: false, dayOfMonth: 1, time: '04:00', type: 'map', rotateSeed: false } as WipeSchedule,
+    discordEnabled: false,
+    discordWebhook: '',
+    discordEvents: { online: true, offline: true, crash: true, wipe: true } as DiscordEvents,
   };
 
   private id = '';
@@ -118,6 +121,9 @@ export class ServerPage implements OnInit, OnDestroy {
           autoUpdate: server.autoUpdate,
           autoRestart: server.autoRestart,
           wipeSchedule: { ...server.wipeSchedule },
+          discordEnabled: server.discord.enabled,
+          discordWebhook: '',
+          discordEvents: { ...server.discord.events },
         };
         if (!this.isRemote()) {
           this.loadConfig();
@@ -145,6 +151,20 @@ export class ServerPage implements OnInit, OnDestroy {
 
   restart(): void {
     this.action(this.api.restart(this.id));
+  }
+
+  testDiscord(): void {
+    this.busy.set(true);
+    this.api.testDiscord(this.id).subscribe({
+      next: () => {
+        this.busy.set(false);
+        this.notice.set('Mensagem de teste enviada ao Discord.');
+      },
+      error: (err) => {
+        this.busy.set(false);
+        this.error.set(readError(err, 'Falha ao enviar a mensagem de teste.'));
+      },
+    });
   }
 
   updateFiles(): void {
@@ -286,6 +306,11 @@ export class ServerPage implements OnInit, OnDestroy {
         enabled: this.settings.mode === 'remote' ? false : this.settings.wipeSchedule.enabled,
       },
     };
+    payload.discord = {
+      enabled: this.settings.discordEnabled,
+      events: { ...this.settings.discordEvents },
+      ...(this.settings.discordWebhook.trim() ? { webhookUrl: this.settings.discordWebhook.trim() } : {}),
+    } as Server['discord'];
     if (this.settings.rconPassword) payload.rconPassword = this.settings.rconPassword;
     this.api.updateServer(this.id, payload).subscribe({
       next: (server) => {

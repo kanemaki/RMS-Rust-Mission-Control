@@ -3,6 +3,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { configFile, ensureDirs, repoRoot } from './paths.js';
 import { ValidationError } from './errors.js';
+import { DISCORD_EVENTS, defaultDiscord, isValidWebhook } from './discord.js';
 
 const IDENTITY_RE = /^[A-Za-z0-9_-]{1,32}$/;
 
@@ -46,6 +47,7 @@ function defaultServer(detected = detectInstall()) {
     saveInterval: 300,
     startedAtOverride: null,
     wipeSchedule: { enabled: false, dayOfMonth: 1, time: '04:00', type: 'map', rotateSeed: false },
+    discord: defaultDiscord(),
     autoUpdate: true,
     autoRestart: true,
     extraArgs: [],
@@ -162,6 +164,7 @@ export function normalizeServer(input, existing = null) {
 
   merged.startedAtOverride = normalizeTimestamp(merged.startedAtOverride);
   merged.wipeSchedule = normalizeWipeSchedule(merged.wipeSchedule, merged.mode);
+  merged.discord = normalizeDiscord(input.discord, existing?.discord ?? merged.discord);
 
   merged.extraArgs = Array.isArray(merged.extraArgs)
     ? merged.extraArgs.map((arg) => String(arg)).filter(Boolean)
@@ -202,6 +205,31 @@ function normalizeWipeSchedule(value, mode) {
     throw new ValidationError('Wipe agendado está disponível apenas para servidores locais.');
   }
   return schedule;
+}
+
+function normalizeDiscord(value, current) {
+  const base = { ...defaultDiscord(), ...(current && typeof current === 'object' ? current : {}) };
+  const input = value && typeof value === 'object' ? value : {};
+  const discord = {
+    enabled: input.enabled === undefined ? Boolean(base.enabled) : Boolean(input.enabled),
+    webhookUrl: String(base.webhookUrl ?? ''),
+    events: { ...defaultDiscord().events, ...(base.events ?? {}) },
+  };
+  if (typeof input.webhookUrl === 'string' && input.webhookUrl.trim()) {
+    discord.webhookUrl = input.webhookUrl.trim();
+  }
+  if (input.clearWebhook === true) discord.webhookUrl = '';
+  for (const key of DISCORD_EVENTS) {
+    if (input.events && key in input.events) discord.events[key] = Boolean(input.events[key]);
+    discord.events[key] = Boolean(discord.events[key]);
+  }
+  if (discord.webhookUrl && !isValidWebhook(discord.webhookUrl)) {
+    throw new ValidationError('discord.webhookUrl deve ser uma URL de webhook do Discord (https://discord.com/api/webhooks/...).');
+  }
+  if (discord.enabled && !discord.webhookUrl) {
+    throw new ValidationError('Informe a URL do webhook para ativar os alertas do Discord.');
+  }
+  return discord;
 }
 
 function resolveOptionalPath(value) {
@@ -255,6 +283,11 @@ export function removeServer(id) {
 }
 
 export function publicServer(server) {
-  const { rconPassword, ...rest } = server;
-  return { ...rest, rconPasswordSet: Boolean(rconPassword) };
+  const { rconPassword, discord, ...rest } = server;
+  const { webhookUrl, ...discordPublic } = discord ?? defaultDiscord();
+  return {
+    ...rest,
+    rconPasswordSet: Boolean(rconPassword),
+    discord: { ...discordPublic, webhookSet: Boolean(webhookUrl) },
+  };
 }

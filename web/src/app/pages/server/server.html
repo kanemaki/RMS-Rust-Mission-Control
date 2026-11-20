@@ -377,6 +377,49 @@
           </fieldset>
         }
 
+        <fieldset class="wipe-settings">
+          <legend>{{ 'server.discord.title' | t }}</legend>
+          <label class="switch">
+            <input type="checkbox" name="discordEnabled" [(ngModel)]="settings.discordEnabled" />
+            <span>{{ 'server.discord.enabled' | t }}</span>
+          </label>
+          @if (settings.discordEnabled) {
+            <div class="field">
+              <label for="discord-webhook">{{ 'server.discord.webhook' | t }}</label>
+              <input
+                id="discord-webhook"
+                name="discord-webhook"
+                type="password"
+                autocomplete="off"
+                [(ngModel)]="settings.discordWebhook"
+                [placeholder]="s.discord.webhookSet ? ('server.discord.keep' | t) : 'https://discord.com/api/webhooks/...'"
+              />
+            </div>
+            <div class="toggles">
+              <label class="switch">
+                <input type="checkbox" name="dcOnline" [(ngModel)]="settings.discordEvents.online" />
+                <span>{{ 'server.discord.online' | t }}</span>
+              </label>
+              <label class="switch">
+                <input type="checkbox" name="dcOffline" [(ngModel)]="settings.discordEvents.offline" />
+                <span>{{ 'server.discord.offline' | t }}</span>
+              </label>
+              <label class="switch">
+                <input type="checkbox" name="dcCrash" [(ngModel)]="settings.discordEvents.crash" />
+                <span>{{ 'server.discord.crash' | t }}</span>
+              </label>
+              <label class="switch">
+                <input type="checkbox" name="dcWipe" [(ngModel)]="settings.discordEvents.wipe" />
+                <span>{{ 'server.discord.wipe' | t }}</span>
+              </label>
+            </div>
+            <p class="hint">{{ 'server.discord.hint' | t }}</p>
+            @if (s.discord.webhookSet) {
+              <button type="button" class="btn" [disabled]="busy()" (click)="testDiscord()">{{ 'server.discord.test' | t }}</button>
+            }
+          }
+        </fieldset>
+
         @if (isRemote()) {
           <div class="paths">
             <p><span class="muted">{{ 'server.settings.modeLabel' | t }}</span> {{ 'server.settings.remoteMode' | t }}</p>

@@ -11,6 +11,7 @@ import { createLineSplitter } from './lines.js';
 import { parsePlayerList } from './playerlist.js';
 import { createBackup } from './backups.js';
 import { ConflictError } from './errors.js';
+import { notifyDiscord } from './discord.js';
 import { clearWipeData, nextMonthlyWipeAt } from './wipe-scheduler.js';
 import { updateServer } from './store.js';
 
@@ -539,6 +540,11 @@ export class ServerRuntime {
         if (updated) this.applyConfig(updated);
       }
       this.#log('agent', `Wipe concluído: ${removed} item(ns) removido(s)${nextSeed === null ? '.' : `; nova seed: ${nextSeed}.`}`);
+      void this.#notify(
+        'wipe',
+        'Wipe concluído',
+        `Tipo: ${typeLabel}. ${removed} item(ns) removido(s).${nextSeed === null ? '' : ` Nova seed: ${nextSeed}.`}`,
+      );
 
       if (wasRunning) {
         restartAttempted = true;
@@ -546,6 +552,7 @@ export class ServerRuntime {
       }
     } catch (error) {
       this.#log('agent', `Falha no wipe agendado: ${error.message}`);
+      void this.#notify('wipe', 'Falha no wipe agendado', error.message);
       if (restartNeeded && !restartAttempted) {
         restartAttempted = true;
         try {
@@ -596,9 +603,26 @@ export class ServerRuntime {
 
   #setState(state) {
     if (this.state === state) return;
+    const previous = this.state;
     this.state = state;
     recordSample(this.server.id, state, this.players);
     logBus.status(this.server.id, this.status());
+    this.#notifyStateChange(previous, state);
+  }
+
+  #notifyStateChange(previous, state) {
+    if (state === 'running') {
+      void this.#notify('online', 'Servidor online', 'O servidor está pronto para receber jogadores.');
+    } else if (state === 'stopped' && ['running', 'stopping'].includes(previous)) {
+      void this.#notify('offline', 'Servidor offline', 'O servidor foi encerrado.');
+    } else if (state === 'error') {
+      const reason = this.lastError ? `Motivo: ${this.lastError}` : 'O processo encerrou de forma inesperada.';
+      void this.#notify('crash', 'Servidor com falha', reason);
+    }
+  }
+
+  #notify(kind, title, description) {
+    return notifyDiscord(this.server, kind, { title, description }, (line) => this.#log('agent', line));
   }
 
   #log(stream, line) {

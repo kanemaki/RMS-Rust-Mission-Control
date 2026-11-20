@@ -98,6 +98,10 @@ export class ApiService {
     return this.http.put<ServerConfig>(`/api/servers/${id}/config`, { values });
   }
 
+  testDiscord(id: string): Observable<{ ok: boolean }> {
+    return this.http.post<{ ok: boolean }>(`/api/servers/${id}/discord/test`, {});
+  }
+
   backups(id: string): Observable<Backup[]> {
     return this.http.get<Backup[]>(`/api/servers/${id}/backups`);
   }

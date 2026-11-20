@@ -29,6 +29,22 @@ export interface WipeSchedule {
   rotateSeed: boolean;
 }
 
+export interface DiscordEvents {
+  online: boolean;
+  offline: boolean;
+  crash: boolean;
+  wipe: boolean;
+}
+
+export interface DiscordSettings {
+  enabled: boolean;
+  webhookSet: boolean;
+  events: DiscordEvents;
+  /** Aceito apenas em update; nunca retornado pela API. */
+  webhookUrl?: string;
+  clearWebhook?: boolean;
+}
+
 export interface Server {
   id: string;
   name: string;
@@ -52,6 +68,7 @@ export interface Server {
   saveInterval: number;
   startedAtOverride: number | null;
   wipeSchedule: WipeSchedule;
+  discord: DiscordSettings;
   autoUpdate: boolean;
   autoRestart: boolean;
   extraArgs: string[];

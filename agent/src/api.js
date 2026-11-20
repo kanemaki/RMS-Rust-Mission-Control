@@ -15,6 +15,7 @@ import { logBus } from './logbus.js';
 import { readConfig, writeConfig, launchPatch, validateValues, withoutSecrets } from './cfg.js';
 import { createBackup, deleteBackup, listBackups, restoreBackup } from './backups.js';
 import { audit, listAudit, listSamples } from './db.js';
+import { sendDiscord } from './discord.js';
 import { scanInstall } from './discover.js';
 import {
   clearCookie,
@@ -218,6 +219,22 @@ export function createApi({ secureCookies = false, version = '0.1.0' } = {}) {
     if (updated) runtimeManager.sync(loadConfig().servers);
     audit('config_update', { serverId: server.id, detail: Object.keys(values).join(','), ip: req.ip });
     res.json(withoutSecrets(result));
+  });
+
+  router.post('/servers/:id/discord/test', async (req, res) => {
+    const server = requireServer(req, res);
+    if (!server) return;
+    if (!server.discord?.webhookUrl) throw new ValidationError('Configure e salve a URL do webhook primeiro.');
+    try {
+      await sendDiscord(server, 'test', {
+        title: 'Teste de alerta',
+        description: 'Se você está vendo esta mensagem, os alertas do Rust Mission Control estão funcionando.',
+      });
+    } catch (error) {
+      res.status(502).json({ error: error.name === 'TimeoutError' ? 'Tempo esgotado ao contatar o Discord.' : error.message });
+      return;
+    }
+    res.json({ ok: true });
   });
 
   router.get('/servers/:id/backups', (req, res) => {
