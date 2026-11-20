@@ -75,8 +75,19 @@ Dados gerados em `agent/data/`:
 - Console ao vivo (stdout/stderr + RCON + chat) com filtro, autoscroll e comandos
 - Editor de `server.cfg` com schema validado, preservando linhas desconhecidas
 - Backups manuais da identidade, restore com backup de segurança automático
+- Wipe mensal agendado de mapa, blueprints ou ambos, com backup completo e opção de seed aleatória
 - Auditoria de ações e sessões persistidas em SQLite
 - PWA instalável, layout responsivo e tema escuro
+
+### Wipe agendado
+
+O wipe é opcional e vem desativado. Para servidores locais gerenciados pelo painel, pode ser agendado
+mensalmente entre os dias 1 e 28, no horário local desta máquina. Antes de apagar, o agente cria um
+backup completo da identidade e, se o servidor estiver online com RCON conectado, envia avisos RCON aos 10, 5 e 1 minuto.
+O wipe de mapa limpa apenas `server/<identidade>/save/`; o de blueprints remove somente os arquivos
+`player.blueprints*` da identidade. A seed aleatória é opcional e só se aplica a wipes que incluem o mapa.
+Servidores remotos não podem usar essa função. Se o agente estiver desligado na hora marcada, o wipe
+não é executado retroativamente: o próximo agendamento será no mês seguinte.
 
 ## API
 
@@ -215,7 +226,7 @@ WebSocket falso, ciclo de vida com servidor simulado e um fluxo HTTP completo
 
 ## Roadmap
 
-- **Fase 2:** wipe agendado (map/BP), alertas no Discord, backup automático, métricas históricas
+- **Fase 2:** alertas no Discord, backup automático, métricas históricas
 - **Fase 3:** plugins Oxide/uMod, multi-servidor avançado, 2FA (TOTP), licenciamento
 
 > Projeto independente, não afiliado à Facepunch Studios. Não redistribui binários do jogo:

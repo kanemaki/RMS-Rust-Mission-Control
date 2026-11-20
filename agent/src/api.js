@@ -10,6 +10,7 @@ import {
   ValidationError,
 } from './store.js';
 import { runtimeManager } from './process-manager.js';
+import { ConflictError } from './errors.js';
 import { logBus } from './logbus.js';
 import { readConfig, writeConfig } from './cfg.js';
 import { createBackup, deleteBackup, listBackups, restoreBackup } from './backups.js';
@@ -123,6 +124,9 @@ export function createApi({ secureCookies = false, version = '0.1.0' } = {}) {
   router.patch('/servers/:id', (req, res) => {
     const server = requireServer(req, res);
     if (!server) return;
+    if (runtimeManager.get(server.id)?.wipeInProgress) {
+      throw new ConflictError('Não é possível alterar o servidor durante um wipe agendado.');
+    }
     const updated = updateServer(server.id, req.body ?? {});
     runtimeManager.sync(loadConfig().servers);
     audit('server_update', { serverId: server.id, ip: req.ip });

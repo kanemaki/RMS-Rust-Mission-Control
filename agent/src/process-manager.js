@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import crypto from 'node:crypto';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { RconClient } from './rcon.js';
@@ -8,20 +9,20 @@ import { serverLogsDir } from './paths.js';
 import { recordSample } from './db.js';
 import { createLineSplitter } from './lines.js';
 import { parsePlayerList } from './playerlist.js';
+import { createBackup } from './backups.js';
+import { ConflictError } from './errors.js';
+import { clearWipeData, nextMonthlyWipeAt } from './wipe-scheduler.js';
+import { updateServer } from './store.js';
 
 const READY_RE = /server startup complete|steamServer initialized|server initialized/i;
 const PLAYER_POLL_MS = 15000;
 const MAX_RESTARTS = 5;
 const RESTART_WINDOW_MS = 10 * 60 * 1000;
 const HEALTHY_UPTIME_MS = 5 * 60 * 1000;
+const WIPE_WARNINGS = [10, 5, 1];
+const MAX_TIMER_MS = 24 * 60 * 60 * 1000;
 
-export class ConflictError extends Error {
-  constructor(message) {
-    super(message);
-    this.name = 'ConflictError';
-    this.status = 409;
-  }
-}
+export { ConflictError };
 
 export class ServerRuntime {
   constructor(server) {
@@ -41,11 +42,16 @@ export class ServerRuntime {
     this.intentionalStop = false;
     this.restartCount = 0;
     this.restartTimer = null;
+    this.wipeTimer = null;
+    this.wipeInProgress = false;
+    this.scheduledWipeAt = null;
+    this.wipeWarningThreshold = null;
     this.readyTimer = null;
     this.playerTimer = null;
     this.logStream = null;
     this.logStreamDay = null;
     this.lastLines = [];
+    this.#scheduleWipe();
   }
 
   applyConfig(server) {
@@ -59,6 +65,8 @@ export class ServerRuntime {
     if (rconChanged && this.state === 'running') {
       this.#log('agent', 'Configuração de RCON mudou; reinicie o servidor para aplicar.');
     }
+    this.#scheduleWipe();
+    logBus.status(this.server.id, this.status());
   }
 
   status() {
@@ -86,23 +94,19 @@ export class ServerRuntime {
       lastError: this.lastError,
       autoRestart: this.server.autoRestart,
       autoUpdate: this.server.autoUpdate,
+      nextWipeAt: this.scheduledWipeAt,
       install: this.remote
         ? null
         : {
             installed: fs.existsSync(executable),
             executable,
-            steamCmd: Boolean(
-              this.server.steamCmdDir &&
-                fs.existsSync(
-                  path.join(this.server.steamCmdDir, process.platform === 'win32' ? 'steamcmd.exe' : 'steamcmd.sh'),
-                ),
-            ),
+            steamCmd: true,
           },
     };
   }
 
-  async start({ skipUpdate = false } = {}) {
-    this.#assertIdle();
+  async start({ skipUpdate = false, scheduledWipe = false } = {}) {
+    this.#assertIdle(scheduledWipe);
     if (this.state === 'running' || this.state === 'starting') {
       throw new ConflictError('O servidor já está em execução.');
     }
@@ -112,7 +116,7 @@ export class ServerRuntime {
     this.lastError = null;
     try {
       if (this.server.autoUpdate && !skipUpdate) {
-        const result = await this.update();
+        const result = await this.#runUpdate();
         if (!result.ok) {
           const installed = fs.existsSync(this.#executablePath());
           this.#log(
@@ -131,11 +135,13 @@ export class ServerRuntime {
     return this.status();
   }
 
-  async stop({ graceful = true } = {}) {
+  async stop({ graceful = true, scheduledWipe = false } = {}) {
+    if (this.busy || (this.wipeInProgress && !scheduledWipe)) {
+      throw new ConflictError('Outra operação está em andamento.');
+    }
     if (this.state === 'stopped' || this.state === 'error') {
       return this.status();
     }
-    if (this.busy) throw new ConflictError('Outra operação está em andamento.');
     if (this.remote) {
       this.intentionalStop = true;
       this.rcon?.stop();
@@ -174,11 +180,17 @@ export class ServerRuntime {
   }
 
   async restart(options = {}) {
+    this.#assertIdle();
     await this.stop();
     return this.start(options);
   }
 
   async update() {
+    if (this.wipeInProgress || this.busy) throw new ConflictError('Outra operação está em andamento.');
+    return this.#runUpdate();
+  }
+
+  async #runUpdate() {
     if (this.remote) {
       throw new ConflictError('Servidor remoto: atualize os arquivos na máquina de origem.');
     }
@@ -211,6 +223,7 @@ export class ServerRuntime {
 
   dispose() {
     clearTimeout(this.restartTimer);
+    clearTimeout(this.wipeTimer);
     clearTimeout(this.readyTimer);
     clearInterval(this.playerTimer);
     this.rcon?.stop();
@@ -255,8 +268,10 @@ export class ServerRuntime {
     });
   }
 
-  #assertIdle() {
-    if (this.busy) throw new ConflictError('Outra operação está em andamento.');
+  #assertIdle(allowScheduledWipe = false) {
+    if (this.busy || (this.wipeInProgress && !allowScheduledWipe)) {
+      throw new ConflictError('Outra operação está em andamento.');
+    }
   }
 
   #executablePath() {
@@ -426,6 +441,123 @@ export class ServerRuntime {
       clearTimeout(this.readyTimer);
       this.#setState('running');
       this.#log('agent', 'Servidor pronto.');
+    }
+  }
+
+  #scheduleWipe() {
+    clearTimeout(this.wipeTimer);
+    this.wipeWarningThreshold = null;
+    const schedule = this.server.wipeSchedule;
+    if (!schedule?.enabled || this.remote) {
+      this.scheduledWipeAt = null;
+      return;
+    }
+    this.scheduledWipeAt = nextMonthlyWipeAt(schedule);
+    this.#armWipeTimer();
+  }
+
+  #armWipeTimer() {
+    if (!this.scheduledWipeAt || this.wipeInProgress) return;
+    const remaining = this.scheduledWipeAt - Date.now();
+    if (remaining <= 0) {
+      this.wipeWarningThreshold = null;
+      this.wipeTimer = setTimeout(() => void this.#runScheduledWipe(), 0);
+      return;
+    }
+
+    const threshold = WIPE_WARNINGS.find((minutes) => remaining > minutes * 60 * 1000);
+    this.wipeWarningThreshold = threshold ?? null;
+    const targetAt = threshold ? this.scheduledWipeAt - threshold * 60 * 1000 : this.scheduledWipeAt;
+    const delay = Math.min(Math.max(0, targetAt - Date.now()), MAX_TIMER_MS);
+    this.wipeTimer = setTimeout(() => {
+      if (Date.now() < targetAt - 1000) {
+        this.#armWipeTimer();
+        return;
+      }
+      if (this.scheduledWipeAt - Date.now() <= 0) {
+        void this.#runScheduledWipe();
+        return;
+      }
+      const remainingNow = this.scheduledWipeAt - Date.now();
+      const warningMs = this.wipeWarningThreshold * 60 * 1000;
+      if (this.wipeWarningThreshold && Math.abs(remainingNow - warningMs) <= 30_000) {
+        void this.#sendWipeWarning(this.wipeWarningThreshold);
+      }
+      this.#armWipeTimer();
+    }, delay);
+    this.wipeTimer.unref?.();
+  }
+
+  async #sendWipeWarning(minutes) {
+    if (this.state !== 'running' || !this.rcon?.connected) return;
+    const notice = `Server wipe in ${minutes} min / Wipe do servidor em ${minutes} min. Save and disconnect / Salve e desconecte-se.`;
+    try {
+      await this.command(`say ${notice}`);
+    } catch (error) {
+      this.#log('agent', `Não foi possível enviar o aviso do wipe (${minutes} min): ${error.message}`);
+    }
+  }
+
+  async #runScheduledWipe() {
+    if (this.wipeInProgress || !this.server.wipeSchedule?.enabled || this.remote) return;
+    this.wipeInProgress = true;
+    clearTimeout(this.wipeTimer);
+    const wasRunning = this.state === 'running';
+    let restartNeeded = false;
+    let restartAttempted = false;
+
+    try {
+      if (['starting', 'stopping', 'updating'].includes(this.state)) {
+        this.#log('agent', 'Wipe agendado ignorado: o servidor está em outra operação. O próximo wipe continuará agendado.');
+        return;
+      }
+      if (wasRunning && !this.rcon?.connected) {
+        this.#log('agent', 'Wipe agendado cancelado: RCON indisponível, não foi possível garantir os avisos aos jogadores.');
+        return;
+      }
+
+      const schedule = this.server.wipeSchedule;
+      const typeLabel = schedule.type === 'map' ? 'mapa' : schedule.type === 'blueprints' ? 'blueprints' : 'mapa e blueprints';
+      this.#log('agent', `Iniciando wipe agendado (${typeLabel}); preparando backup de segurança...`);
+      if (wasRunning) {
+        try {
+          await this.command(`say Wipe iniciado / Limpeza iniciada (${typeLabel}). Retornaremos em breve.`);
+        } catch {
+          /* segue para o encerramento gracioso */
+        }
+        await this.stop({ scheduledWipe: true });
+        restartNeeded = true;
+      }
+      const backup = await createBackup(this.server, this, { label: 'scheduled-wipe' });
+      this.#log('agent', `Backup de segurança criado: ${backup.name}`);
+
+      const removed = clearWipeData(this.server, schedule.type);
+      let nextSeed = null;
+      if (schedule.rotateSeed && ['map', 'full'].includes(schedule.type)) {
+        nextSeed = crypto.randomInt(0, 2147483648);
+        const updated = updateServer(this.server.id, { seed: nextSeed });
+        if (updated) this.applyConfig(updated);
+      }
+      this.#log('agent', `Wipe concluído: ${removed} item(ns) removido(s)${nextSeed === null ? '.' : `; nova seed: ${nextSeed}.`}`);
+
+      if (wasRunning) {
+        restartAttempted = true;
+        await this.start({ skipUpdate: true, scheduledWipe: true });
+      }
+    } catch (error) {
+      this.#log('agent', `Falha no wipe agendado: ${error.message}`);
+      if (restartNeeded && !restartAttempted) {
+        restartAttempted = true;
+        try {
+          await this.start({ skipUpdate: true, scheduledWipe: true });
+        } catch (restartError) {
+          this.#log('agent', `Falha ao recuperar o servidor após cancelamento do wipe: ${restartError.message}`);
+        }
+      }
+    } finally {
+      this.wipeInProgress = false;
+      this.#scheduleWipe();
+      logBus.status(this.server.id, this.status());
     }
   }
 

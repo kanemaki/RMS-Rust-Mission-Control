@@ -45,6 +45,7 @@ function defaultServer(detected = detectInstall()) {
     maxPlayers: 50,
     saveInterval: 300,
     startedAtOverride: null,
+    wipeSchedule: { enabled: false, dayOfMonth: 1, time: '04:00', type: 'map', rotateSeed: false },
     autoUpdate: true,
     autoRestart: true,
     extraArgs: [],
@@ -160,6 +161,7 @@ export function normalizeServer(input, existing = null) {
   }
 
   merged.startedAtOverride = normalizeTimestamp(merged.startedAtOverride);
+  merged.wipeSchedule = normalizeWipeSchedule(merged.wipeSchedule, merged.mode);
 
   merged.extraArgs = Array.isArray(merged.extraArgs)
     ? merged.extraArgs.map((arg) => String(arg)).filter(Boolean)
@@ -178,6 +180,28 @@ function normalizeTimestamp(value) {
     throw new ValidationError('startedAtOverride deve ser uma data válida.');
   }
   return Math.trunc(num);
+}
+
+function normalizeWipeSchedule(value, mode) {
+  const defaults = { enabled: false, dayOfMonth: 1, time: '04:00', type: 'map', rotateSeed: false };
+  const schedule = { ...defaults, ...(value && typeof value === 'object' ? value : {}) };
+  schedule.enabled = Boolean(schedule.enabled);
+  schedule.dayOfMonth = clampInt(schedule.dayOfMonth, 1, 28, 'wipeSchedule.dayOfMonth');
+  schedule.time = String(schedule.time ?? '');
+  if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(schedule.time)) {
+    throw new ValidationError('wipeSchedule.time deve estar no formato HH:mm.');
+  }
+  if (!['map', 'blueprints', 'full'].includes(schedule.type)) {
+    throw new ValidationError('wipeSchedule.type deve ser map, blueprints ou full.');
+  }
+  schedule.rotateSeed = Boolean(schedule.rotateSeed);
+  if (schedule.rotateSeed && !['map', 'full'].includes(schedule.type)) {
+    throw new ValidationError('A troca de seed exige wipe de mapa.');
+  }
+  if (schedule.enabled && mode === 'remote') {
+    throw new ValidationError('Wipe agendado está disponível apenas para servidores locais.');
+  }
+  return schedule;
 }
 
 function resolveOptionalPath(value) {

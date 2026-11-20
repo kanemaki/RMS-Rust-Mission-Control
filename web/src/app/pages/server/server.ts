@@ -5,7 +5,7 @@ import { Subscription } from 'rxjs';
 import { ApiService } from '../../core/api.service';
 import { readError } from '../../core/auth.service';
 import { EventsService } from '../../core/events.service';
-import { Backup, ConfigField, LogEntry, Server, ServerConfig, ServerState } from '../../core/models';
+import { Backup, ConfigField, LogEntry, Server, ServerConfig, ServerState, WipeSchedule } from '../../core/models';
 import { I18nService } from '../../core/i18n.service';
 import { TPipe } from '../../shared/t.pipe';
 
@@ -58,6 +58,7 @@ export class ServerPage implements OnInit, OnDestroy {
     startedAt: '',
     autoUpdate: true,
     autoRestart: true,
+    wipeSchedule: { enabled: false, dayOfMonth: 1, time: '04:00', type: 'map', rotateSeed: false } as WipeSchedule,
   };
 
   private id = '';
@@ -116,6 +117,7 @@ export class ServerPage implements OnInit, OnDestroy {
           startedAt: toLocalInput(server.startedAtOverride),
           autoUpdate: server.autoUpdate,
           autoRestart: server.autoRestart,
+          wipeSchedule: { ...server.wipeSchedule },
         };
         if (!this.isRemote()) {
           this.loadConfig();
@@ -279,6 +281,10 @@ export class ServerPage implements OnInit, OnDestroy {
       startedAtOverride: this.settings.startedAt ? new Date(this.settings.startedAt).getTime() : null,
       autoUpdate: this.settings.autoUpdate,
       autoRestart: this.settings.autoRestart,
+      wipeSchedule: {
+        ...this.settings.wipeSchedule,
+        enabled: this.settings.mode === 'remote' ? false : this.settings.wipeSchedule.enabled,
+      },
     };
     if (this.settings.rconPassword) payload.rconPassword = this.settings.rconPassword;
     this.api.updateServer(this.id, payload).subscribe({
@@ -340,14 +346,19 @@ export class ServerPage implements OnInit, OnDestroy {
     return `${minutes}m`;
   }
 
+  setWipeType(type: WipeSchedule['type']): void {
+    this.settings.wipeSchedule.type = type;
+    if (type === 'blueprints') this.settings.wipeSchedule.rotateSeed = false;
+  }
+
   size(bytes: number): string {
     if (bytes > 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
     if (bytes > 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
     return `${Math.max(1, Math.round(bytes / 1024))} KB`;
   }
 
-    date(ts: number): string {
-    return new Date(ts).toLocaleString('pt-BR');
+  date(ts: number): string {
+    return new Date(ts).toLocaleString(this.i18n.lang() === 'pt' ? 'pt-BR' : 'en-US');
   }
 
   private action(request: ReturnType<ApiService['start']>): void {    this.busy.set(true);

@@ -332,6 +332,51 @@
           </label>
         </div>
 
+        @if (!isRemote()) {
+          <fieldset class="wipe-settings">
+            <legend>{{ 'server.wipe.title' | t }}</legend>
+            <label class="switch">
+              <input type="checkbox" name="wipeEnabled" [(ngModel)]="settings.wipeSchedule.enabled" />
+              <span>{{ 'server.wipe.enabled' | t }}</span>
+            </label>
+            @if (settings.wipeSchedule.enabled) {
+              <div class="config-grid wipe-grid">
+                <div class="field">
+                  <label for="wipe-day">{{ 'server.wipe.day' | t }}</label>
+                  <input id="wipe-day" name="wipe-day" type="number" [(ngModel)]="settings.wipeSchedule.dayOfMonth" min="1" max="28" />
+                </div>
+                <div class="field">
+                  <label for="wipe-time">{{ 'server.wipe.time' | t }}</label>
+                  <input id="wipe-time" name="wipe-time" type="time" [(ngModel)]="settings.wipeSchedule.time" />
+                </div>
+                <div class="field">
+                  <label for="wipe-type">{{ 'server.wipe.type' | t }}</label>
+                  <select
+                    id="wipe-type"
+                    name="wipe-type"
+                    [(ngModel)]="settings.wipeSchedule.type"
+                    (ngModelChange)="setWipeType($event)"
+                  >
+                    <option value="map">{{ 'server.wipe.map' | t }}</option>
+                    <option value="blueprints">{{ 'server.wipe.blueprints' | t }}</option>
+                    <option value="full">{{ 'server.wipe.full' | t }}</option>
+                  </select>
+                </div>
+              </div>
+              @if (settings.wipeSchedule.type !== 'blueprints') {
+                <label class="switch">
+                  <input type="checkbox" name="wipeRotateSeed" [(ngModel)]="settings.wipeSchedule.rotateSeed" />
+                  <span>{{ 'server.wipe.rotateSeed' | t }}</span>
+                </label>
+              }
+              <p class="hint">{{ 'server.wipe.safety' | t }}</p>
+              @if (s.status?.nextWipeAt) {
+                <p class="hint">{{ 'server.wipe.next' | t }} <strong>{{ date(s.status!.nextWipeAt!) }}</strong></p>
+              }
+            }
+          </fieldset>
+        }
+
         @if (isRemote()) {
           <div class="paths">
             <p><span class="muted">{{ 'server.settings.modeLabel' | t }}</span> {{ 'server.settings.remoteMode' | t }}</p>

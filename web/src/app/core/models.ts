@@ -17,7 +17,16 @@ export interface ServerStatus {
   lastError: string | null;
   autoRestart: boolean;
   autoUpdate: boolean;
+  nextWipeAt?: number | null;
   install: { installed: boolean; executable: string; steamCmd: boolean } | null;
+}
+
+export interface WipeSchedule {
+  enabled: boolean;
+  dayOfMonth: number;
+  time: string;
+  type: 'map' | 'blueprints' | 'full';
+  rotateSeed: boolean;
 }
 
 export interface Server {
@@ -42,6 +51,7 @@ export interface Server {
   maxPlayers: number;
   saveInterval: number;
   startedAtOverride: number | null;
+  wipeSchedule: WipeSchedule;
   autoUpdate: boolean;
   autoRestart: boolean;
   extraArgs: string[];
