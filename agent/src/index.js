@@ -27,6 +27,7 @@ app.use((req, res, next) => {
   next();
 });
 
+app.use('/api/servers/:id/oxide/plugins', express.json({ limit: '3mb' }));
 app.use(express.json({ limit: '256kb' }));
 
 const secureCookies = process.env.RMC_SECURE_COOKIES === '1';

@@ -86,6 +86,16 @@ export function parsePluginHeader(text) {
   };
 }
 
+export function parseRequires(text) {
+  const names = [];
+  const re = /^\s*\/\/\s*Requires:\s*([A-Za-z0-9_-]{1,64})\s*$/gim;
+  let match;
+  while ((match = re.exec(String(text ?? '')))) {
+    if (!names.includes(match[1])) names.push(match[1]);
+  }
+  return names;
+}
+
 export function oxideStatus(server) {
   const pluginsDir = oxidePluginsDir(server);
   const pluginCount = fs.existsSync(pluginsDir)
@@ -115,8 +125,11 @@ export function listPlugins(server) {
     }
     if (!stat.isFile()) continue;
     let header = null;
+    let requires = [];
     try {
-      header = parsePluginHeader(fs.readFileSync(full, 'utf8'));
+      const text = fs.readFileSync(full, 'utf8');
+      header = parsePluginHeader(text);
+      requires = parseRequires(text);
     } catch {
       /* arquivo ilegível: lista mesmo assim */
     }
@@ -129,6 +142,7 @@ export function listPlugins(server) {
       sizeBytes: stat.size,
       updatedAt: stat.mtimeMs,
       hasConfig: fs.existsSync(path.join(configDir, `${stem}.json`)),
+      missingDependencies: requires.filter((dep) => !fs.existsSync(path.join(dir, `${dep}.cs`))),
     });
   }
   plugins.sort((a, b) => a.name.localeCompare(b.name));
@@ -155,7 +169,26 @@ export function savePluginContent(server, name, content) {
   return { name: stem, title: header?.title || stem };
 }
 
-export async function installPluginFromUmod(server, url) {
+export async function installPluginFromUmod(server, url, depth = 0) {
+  const result = await downloadUmodPlugin(server, url);
+  const installedDeps = [];
+  const failedDeps = [];
+  if (depth < 3) {
+    const text = fs.readFileSync(pluginFile(server, result.name).file, 'utf8');
+    for (const dep of parseRequires(text)) {
+      if (fs.existsSync(pluginFile(server, dep).file)) continue;
+      try {
+        await installPluginFromUmod(server, `https://umod.org/plugins/${dep}.cs`, depth + 1);
+        installedDeps.push(dep);
+      } catch (error) {
+        failedDeps.push({ name: dep, error: error.message });
+      }
+    }
+  }
+  return { ...result, installedDeps, failedDeps };
+}
+
+async function downloadUmodPlugin(server, url) {
   const match = UMOD_URL_RE.exec(String(url ?? '').trim());
   if (!match) {
     throw new ValidationError('URL inválida. Use um endereço https://umod.org/plugins/Nome.cs.');
