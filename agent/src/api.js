@@ -14,9 +14,12 @@ import { ConflictError } from './errors.js';
 import { logBus } from './logbus.js';
 import { readConfig, writeConfig, launchPatch, validateValues, withoutSecrets } from './cfg.js';
 import { createBackup, deleteBackup, listBackups, restoreBackup } from './backups.js';
-import { audit, listAudit, listSamples } from './db.js';
+import { audit, listAudit, listSamples, listSamplesRange } from './db.js';
 import { sendDiscord } from './discord.js';
 import { scanInstall } from './discover.js';
+
+const SAMPLE_RANGES = { '24h': 24, '7d': 24 * 7, '30d': 24 * 30 };
+const MAX_POINTS = 400;
 import {
   clearCookie,
   createSession,
@@ -270,7 +273,20 @@ export function createApi({ secureCookies = false, version = '0.1.0' } = {}) {
   router.get('/servers/:id/samples', (req, res) => {
     const server = requireServer(req, res);
     if (!server) return;
-    res.json(listSamples(server.id, Number(req.query.limit) || 120));
+    const range = String(req.query.range || '');
+    if (!range) {
+      res.json(listSamples(server.id, Number(req.query.limit) || 120));
+      return;
+    }
+    const hours = SAMPLE_RANGES[range];
+    if (!hours) {
+      res.status(400).json({ error: 'Intervalo inválido. Use 24h, 7d ou 30d.' });
+      return;
+    }
+    const until = Date.now();
+    const since = until - hours * 60 * 60 * 1000;
+    const bucketMs = Math.max(60_000, Math.ceil((until - since) / MAX_POINTS / 60_000) * 60_000);
+    res.json({ range, bucketMs, since, until, samples: listSamplesRange(server.id, { since, until, bucketMs }) });
   });
 
   router.get('/audit', (req, res) => {

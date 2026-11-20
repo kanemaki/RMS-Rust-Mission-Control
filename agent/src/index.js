@@ -6,6 +6,7 @@ import { loadConfig } from './store.js';
 import { runtimeManager } from './process-manager.js';
 import { publicDir } from './paths.js';
 import { pruneSamples, recordSample } from './db.js';
+import { sampleProcess } from './procstats.js';
 
 const PORT = Number(process.env.RMC_PORT) || 8090;
 const HOST = process.env.RMC_HOST || '127.0.0.1';
@@ -64,7 +65,17 @@ pruneSamples();
 
 const sampleTimer = setInterval(() => {
   for (const runtime of runtimeManager.all()) {
-    if (runtime.state === 'running') recordSample(runtime.server.id, runtime.state, runtime.players);
+    if (runtime.state !== 'running') continue;
+    const stats = runtime.remote || !runtime.pid ? Promise.resolve(null) : sampleProcess(runtime.pid);
+    void stats.then((resources) => {
+      recordSample(
+        runtime.server.id,
+        runtime.state,
+        runtime.players,
+        resources?.cpu ?? null,
+        resources?.mem ?? null,
+      );
+    });
   }
 }, 60000);
 sampleTimer.unref();

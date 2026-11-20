@@ -433,4 +433,135 @@ legend {
     flex-direction: column;
     align-items: stretch;
   }
+
+  .metric-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.metrics-tools {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.range-switch {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--input-bg);
+}
+
+.range-switch button {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 13px;
+  padding: 6px 14px;
+  cursor: pointer;
+}
+
+.range-switch button:hover {
+  color: var(--text);
+}
+
+.range-switch button.active {
+  background: var(--accent);
+  color: #fff;
+}
+
+.metric-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 14px;
+}
+
+.metric-card {
+  background: var(--panel-2);
+  border: 1px solid var(--border-soft);
+  border-radius: 12px;
+  padding: 12px 14px 8px;
+}
+
+.metric-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+
+.metric-head h3 {
+  font-size: 14px;
+  margin: 0;
+}
+
+.metric-stats {
+  display: flex;
+  gap: 14px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.metric-stats b {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.chart {
+  width: 100%;
+  height: 140px;
+  display: block;
+}
+
+.chart .grid {
+  stroke: var(--border-soft);
+  stroke-width: 1;
+}
+
+.chart .limit {
+  stroke: var(--warn);
+  stroke-width: 1;
+  stroke-dasharray: 4 4;
+  opacity: 0.7;
+}
+
+.chart .series {
+  fill: none;
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.chart .series.players {
+  stroke: var(--accent);
+}
+
+.chart .series.cpu {
+  stroke: var(--info);
+}
+
+.chart .series.mem {
+  stroke: var(--ok);
+}
+
+.metric-axis {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11.5px;
+  color: var(--muted);
+  padding: 2px 2px 4px;
+}
+
+.metrics-empty {
+  border: 1px dashed var(--border);
+  border-radius: 12px;
+  padding: 32px;
+  text-align: center;
+  color: var(--muted);
 }

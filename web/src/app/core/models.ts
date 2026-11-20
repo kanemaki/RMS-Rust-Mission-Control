@@ -116,6 +116,23 @@ export interface Backup {
   createdAt: number;
 }
 
+export interface Sample {
+  ts: number;
+  state: ServerState;
+  players: number;
+  cpu: number | null;
+  mem: number | null;
+  samples?: number;
+}
+
+export interface SamplesResponse {
+  range: '24h' | '7d' | '30d';
+  bucketMs: number;
+  since: number;
+  until: number;
+  samples: Sample[];
+}
+
 export interface AuditEntry {
   id: number;
   ts: number;

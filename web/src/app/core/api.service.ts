@@ -6,6 +6,7 @@ import {
   Backup,
   InstallScan,
   LogEntry,
+  SamplesResponse,
   Server,
   ServerConfig,
   ServerStatus,
@@ -88,6 +89,10 @@ export class ApiService {
 
   logs(id: string, limit = 300): Observable<LogEntry[]> {
     return this.http.get<LogEntry[]>(`/api/servers/${id}/logs?limit=${limit}`);
+  }
+
+  samples(id: string, range: '24h' | '7d' | '30d'): Observable<SamplesResponse> {
+    return this.http.get<SamplesResponse>(`/api/servers/${id}/samples`, { params: { range } });
   }
 
   config(id: string): Observable<ServerConfig> {

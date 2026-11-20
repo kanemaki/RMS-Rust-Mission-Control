@@ -65,6 +65,9 @@
     </button>
     @if (!isRemote()) {
       <button type="button" [class.active]="tab() === 'config'" (click)="setTab('config')">server.cfg</button>
+      <button type="button" [class.active]="tab() === 'metrics'" (click)="setTab('metrics')">
+        {{ 'server.tab.metrics' | t }}
+      </button>
       <button type="button" [class.active]="tab() === 'backups'" (click)="setTab('backups')">
         {{ 'server.tab.backups' | t }}
       </button>
@@ -483,6 +486,104 @@
             {{ 'server.settings.dangerAction' | t }}
           </button>
         </div>
+      </section>
+    }
+
+    @case ('metrics') {
+      <section class="panel metrics-panel">
+        <div class="metrics-tools">
+          <div class="range-switch">
+            @for (range of ranges; track range) {
+              <button
+                type="button"
+                [class.active]="metricsRange() === range"
+                (click)="setMetricsRange(range)"
+              >
+                {{ range }}
+              </button>
+            }
+          </div>
+          <button class="btn sm ghost" type="button" [disabled]="metricsLoading()" (click)="loadMetrics()">
+            {{ 'metrics.refresh' | t }}
+          </button>
+        </div>
+
+        @if (metricsLoading() && !metrics()) {
+          <div class="metrics-empty">{{ 'server.loading' | t }}</div>
+        } @else if (metricsEmpty()) {
+          <div class="metrics-empty">{{ 'metrics.empty' | t }}</div>
+        } @else {
+          <div class="metric-grid">
+            <div class="metric-card">
+              <header class="metric-head">
+                <h3>{{ 'metrics.players' | t }}</h3>
+                <div class="metric-stats">
+                  <span>{{ 'metrics.peak' | t }} <b>{{ fmt(playersChart()?.peak, 'players') }}</b></span>
+                  <span>{{ 'metrics.avg' | t }} <b>{{ fmt(playersChart()?.avg, 'players') }}</b></span>
+                  <span>{{ 'metrics.now' | t }} <b>{{ fmt(playersChart()?.last, 'players') }}</b></span>
+                </div>
+              </header>
+              <svg viewBox="0 0 600 140" preserveAspectRatio="none" class="chart" role="img">
+                <line class="grid" x1="0" y1="36" x2="600" y2="36" />
+                <line class="grid" x1="0" y1="70" x2="600" y2="70" />
+                <line class="grid" x1="0" y1="104" x2="600" y2="104" />
+                @if (playersChart()?.limitY; as limitY) {
+                  <line class="limit" x1="0" [attr.y1]="limitY" x2="600" [attr.y2]="limitY" />
+                }
+                <path class="series players" [attr.d]="playersChart()?.line ?? ''" />
+              </svg>
+              <footer class="metric-axis">
+                <span>0</span>
+                <span class="axis-time">{{ axisTime(metrics()?.since) }} → {{ axisTime(metrics()?.until) }}</span>
+                <span>{{ fmt(playersChart()?.yMax, 'players') }}</span>
+              </footer>
+            </div>
+
+            <div class="metric-card">
+              <header class="metric-head">
+                <h3>{{ 'metrics.cpu' | t }}</h3>
+                <div class="metric-stats">
+                  <span>{{ 'metrics.peak' | t }} <b>{{ fmt(cpuChart()?.peak, 'cpu') }}</b></span>
+                  <span>{{ 'metrics.avg' | t }} <b>{{ fmt(cpuChart()?.avg, 'cpu') }}</b></span>
+                  <span>{{ 'metrics.now' | t }} <b>{{ fmt(cpuChart()?.last, 'cpu') }}</b></span>
+                </div>
+              </header>
+              <svg viewBox="0 0 600 140" preserveAspectRatio="none" class="chart" role="img">
+                <line class="grid" x1="0" y1="36" x2="600" y2="36" />
+                <line class="grid" x1="0" y1="70" x2="600" y2="70" />
+                <line class="grid" x1="0" y1="104" x2="600" y2="104" />
+                <path class="series cpu" [attr.d]="cpuChart()?.line ?? ''" />
+              </svg>
+              <footer class="metric-axis">
+                <span>0%</span>
+                <span class="axis-time">{{ axisTime(metrics()?.since) }} → {{ axisTime(metrics()?.until) }}</span>
+                <span>100%</span>
+              </footer>
+            </div>
+
+            <div class="metric-card">
+              <header class="metric-head">
+                <h3>{{ 'metrics.mem' | t }}</h3>
+                <div class="metric-stats">
+                  <span>{{ 'metrics.peak' | t }} <b>{{ fmt(memChart()?.peak, 'mem') }}</b></span>
+                  <span>{{ 'metrics.now' | t }} <b>{{ fmt(memChart()?.last, 'mem') }}</b></span>
+                </div>
+              </header>
+              <svg viewBox="0 0 600 140" preserveAspectRatio="none" class="chart" role="img">
+                <line class="grid" x1="0" y1="36" x2="600" y2="36" />
+                <line class="grid" x1="0" y1="70" x2="600" y2="70" />
+                <line class="grid" x1="0" y1="104" x2="600" y2="104" />
+                <path class="series mem" [attr.d]="memChart()?.line ?? ''" />
+              </svg>
+              <footer class="metric-axis">
+                <span>0</span>
+                <span class="axis-time">{{ axisTime(metrics()?.since) }} → {{ axisTime(metrics()?.until) }}</span>
+                <span>{{ fmt(memChart()?.yMax, 'mem') }}</span>
+              </footer>
+            </div>
+          </div>
+          <p class="hint">{{ 'metrics.hint' | t }}</p>
+        }
       </section>
     }
   }

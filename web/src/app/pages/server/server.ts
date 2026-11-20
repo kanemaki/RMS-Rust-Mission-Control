@@ -1,15 +1,25 @@
-import { Component, ElementRef, OnDestroy, OnInit, effect, inject, signal, viewChild } from '@angular/core';
+import { Component, ElementRef, OnDestroy, OnInit, computed, effect, inject, signal, viewChild } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { Subscription } from 'rxjs';
 import { ApiService } from '../../core/api.service';
 import { readError } from '../../core/auth.service';
 import { EventsService } from '../../core/events.service';
-import { Backup, BackupSchedule, DiscordEvents, ConfigField, LogEntry, Server, ServerConfig, ServerState, WipeSchedule } from '../../core/models';
+import { Backup, BackupSchedule, DiscordEvents, ConfigField, LogEntry, SamplesResponse, Sample, Server, ServerConfig, ServerState, WipeSchedule } from '../../core/models';
 import { I18nService } from '../../core/i18n.service';
 import { TPipe } from '../../shared/t.pipe';
 
-type Tab = 'console' | 'config' | 'backups' | 'settings';
+type Tab = 'console' | 'config' | 'metrics' | 'backups' | 'settings';
+type MetricsRange = '24h' | '7d' | '30d';
+
+interface ChartSeries {
+  line: string;
+  yMax: number;
+  peak: number | null;
+  avg: number | null;
+  last: number | null;
+  limitY: number | null;
+}
 
 @Component({
   selector: 'app-server',
@@ -42,6 +52,15 @@ export class ServerPage implements OnInit, OnDestroy {
 
   readonly backups = signal<Backup[]>([]);
   readonly backupBusy = signal<string | null>(null);
+
+  readonly metricsRange = signal<MetricsRange>('24h');
+  readonly metrics = signal<SamplesResponse | null>(null);
+  readonly metricsLoading = signal(false);
+  readonly ranges: MetricsRange[] = ['24h', '7d', '30d'];
+
+  private readonly chartW = 600;
+  private readonly chartH = 140;
+  private readonly chartPad = 2;
 
   settings = {
     name: '',
@@ -140,7 +159,29 @@ export class ServerPage implements OnInit, OnDestroy {
   setTab(tab: Tab): void {
     this.tab.set(tab);
     if (tab === 'config') this.loadConfig();
+    if (tab === 'metrics') this.loadMetrics();
     if (tab === 'backups') this.loadBackups();
+  }
+
+  loadMetrics(): void {
+    this.metricsLoading.set(true);
+    this.api.samples(this.id, this.metricsRange()).subscribe({
+      next: (data) => {
+        this.metrics.set(data);
+        this.metricsLoading.set(false);
+      },
+      error: (err) => {
+        this.metricsLoading.set(false);
+        this.error.set(readError(err, 'Falha ao carregar métricas.'));
+      },
+    });
+  }
+
+  setMetricsRange(range: MetricsRange): void {
+    if (range === this.metricsRange()) return;
+    this.metricsRange.set(range);
+    this.metrics.set(null);
+    this.loadMetrics();
   }
 
   start(skipUpdate = false): void {
@@ -343,6 +384,112 @@ export class ServerPage implements OnInit, OnDestroy {
     const term = this.filter().trim().toLowerCase();
     if (!term) return this.logs();
     return this.logs().filter((entry) => entry.line.toLowerCase().includes(term));
+  }
+
+  readonly playersChart = computed<ChartSeries | null>(() => {
+    const data = this.metrics();
+    if (!data) return null;
+    const points = data.samples.map((s) => ({ ts: s.ts, value: s.players ?? null }));
+    const values = points.map((p) => p.value).filter((v): v is number => v != null);
+    const peak = values.length ? Math.max(...values) : null;
+    const weight = data.samples.reduce((acc, s) => acc + (s.samples ?? 1), 0);
+    const avg = weight
+      ? data.samples.reduce((acc, s) => acc + (s.players ?? 0) * (s.samples ?? 1), 0) / weight
+      : null;
+    const limit = this.server()?.status?.maxPlayers ?? 0;
+    const yMax = Math.max(peak ?? 0, limit) * 1.1 || 1;
+    return {
+      line: this.chartLine(points, yMax, data),
+      yMax,
+      peak,
+      avg,
+      last: values.length ? values[values.length - 1] : null,
+      limitY: limit > 0 ? this.scaleY(limit, yMax) : null,
+    };
+  });
+
+  readonly cpuChart = computed<ChartSeries | null>(() => {
+    const data = this.metrics();
+    if (!data) return null;
+    const points: { ts: number; value: number | null }[] = [];
+    let prev: Sample | null = null;
+    for (const s of data.samples) {
+      let value: number | null = null;
+      if (prev?.cpu != null && s.cpu != null) {
+        const dtMs = s.ts - prev.ts;
+        if (dtMs > 0 && dtMs <= data.bucketMs * 2) {
+          value = Math.min(100, Math.max(0, ((s.cpu - prev.cpu) / (dtMs / 1000)) * 100));
+        }
+      }
+      points.push({ ts: s.ts, value });
+      prev = s.cpu != null ? s : null;
+    }
+    const values = points.map((p) => p.value).filter((v): v is number => v != null);
+    return {
+      line: this.chartLine(points, 100, data),
+      yMax: 100,
+      peak: values.length ? Math.max(...values) : null,
+      avg: values.length ? values.reduce((a, b) => a + b, 0) / values.length : null,
+      last: values.length ? values[values.length - 1] : null,
+      limitY: null,
+    };
+  });
+
+  readonly memChart = computed<ChartSeries | null>(() => {
+    const data = this.metrics();
+    if (!data) return null;
+    const points = data.samples.map((s) => ({ ts: s.ts, value: s.mem ?? null }));
+    const values = points.map((p) => p.value).filter((v): v is number => v != null);
+    const peak = values.length ? Math.max(...values) : null;
+    return {
+      line: this.chartLine(points, (peak ?? 0) * 1.1 || 1, data),
+      yMax: (peak ?? 0) * 1.1 || 1,
+      peak,
+      avg: null,
+      last: values.length ? values[values.length - 1] : null,
+      limitY: null,
+    };
+  });
+
+  metricsEmpty(): boolean {
+    const data = this.metrics();
+    return !data || data.samples.length === 0;
+  }
+
+  fmt(value: number | null | undefined, kind: 'players' | 'cpu' | 'mem'): string {
+    if (value == null) return '—';
+    if (kind === 'mem') return this.size(value);
+    if (kind === 'cpu') return `${value.toFixed(0)}%`;
+    return Number.isInteger(value) ? String(value) : value.toFixed(1);
+  }
+
+  axisTime(ts: number | undefined): string {
+    if (!ts) return '—';
+    const d = new Date(ts);
+    const pad = (n: number) => String(n).padStart(2, '0');
+    if (this.metricsRange() === '24h') return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    return `${pad(d.getDate())}/${pad(d.getMonth() + 1)} ${pad(d.getHours())}h`;
+  }
+
+  private chartLine(points: { ts: number; value: number | null }[], yMax: number, data: SamplesResponse): string {
+    const scaleX = (ts: number) =>
+      this.chartPad + ((ts - data.since) / Math.max(1, data.until - data.since)) * (this.chartW - 2 * this.chartPad);
+    let line = '';
+    let pen = false;
+    for (const p of points) {
+      if (p.value == null || !Number.isFinite(p.value)) {
+        pen = false;
+        continue;
+      }
+      line += `${pen ? 'L' : 'M'}${scaleX(p.ts).toFixed(1)},${this.scaleY(p.value, yMax).toFixed(1)} `;
+      pen = true;
+    }
+    return line.trim();
+  }
+
+  private scaleY(value: number, yMax: number): number {
+    const usable = this.chartH - 2 * this.chartPad;
+    return this.chartH - this.chartPad - (Math.min(value, yMax) / yMax) * usable;
   }
 
   pillClass(state: ServerState | undefined): string {

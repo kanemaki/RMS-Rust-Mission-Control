@@ -77,6 +77,7 @@ Dados gerados em `agent/data/`:
 - Backups manuais da identidade, restore com backup de segurança automático
 - Backup automático diário com retenção configurável
 - Wipe mensal agendado de mapa, blueprints ou ambos, com backup completo e opção de seed aleatória
+- Métricas históricas por servidor: jogadores online, CPU e memória, com gráficos de 24h/7d/30d
 - Auditoria de ações e sessões persistidas em SQLite
 - PWA instalável, layout responsivo e tema escuro
 
@@ -98,6 +99,14 @@ Se o servidor estiver online, o agente pede um `save` via RCON antes de copiar. 
 os N backups automáticos mais recentes (1–52); backups manuais, pré-restauração e do wipe agendado nunca
 são removidos. Se o agente estiver desligado na hora marcada, o backup não é executado retroativamente.
 Há um evento opcional de alerta no Discord para backup concluído ou com falha.
+
+### Métricas históricas
+
+O agente grava uma amostra por minuto de cada servidor em execução: estado, jogadores online (via RCON)
+e, para servidores locais, o uso de CPU (segundos acumulados) e a memória RAM do processo. A aba **Métricas**
+exibe gráficos de 24 horas, 7 dias ou 30 dias, com pico, média e valor atual, além do limite de jogadores
+como referência. Amostras mais antigas que 30 dias são removidas automaticamente. Servidores remotos não
+geram amostras de recursos (os arquivos ficam na máquina de origem).
 
 ## API
 
@@ -133,7 +142,8 @@ GET    /api/servers/:id/backups
 POST   /api/servers/:id/backups      { label? }
 POST   /api/servers/:id/backups/:name/restore
 DELETE /api/servers/:id/backups/:name
-GET    /api/servers/:id/samples
+GET    /api/servers/:id/samples?limit=      últimas N amostras cruas
+GET    /api/servers/:id/samples?range=24h   séries agregadas (24h, 7d ou 30d)
 
 GET    /api/audit?limit=
 GET    /api/events                   SSE (status + logs)
