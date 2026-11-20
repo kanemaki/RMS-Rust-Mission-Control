@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { configFile, ensureDirs, repoRoot } from './paths.js';
+import { ValidationError } from './errors.js';
 
 const IDENTITY_RE = /^[A-Za-z0-9_-]{1,32}$/;
 
@@ -192,13 +193,7 @@ function clampInt(value, min, max, field) {
   return num;
 }
 
-export class ValidationError extends Error {
-  constructor(message) {
-    super(message);
-    this.name = 'ValidationError';
-    this.status = 400;
-  }
-}
+export { ValidationError };
 
 export function findServer(id) {
   return loadConfig().servers.find((server) => server.id === id) ?? null;

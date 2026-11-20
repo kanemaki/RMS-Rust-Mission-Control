@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { serverBackupsDir } from './paths.js';
-import { ConflictError } from './process-manager.js';
+import { ConflictError } from './errors.js';
 import { ValidationError } from './store.js';
 
 const NAME_RE = /^[A-Za-z0-9._-]+\.tar\.gz$/;
