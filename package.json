@@ -1,0 +1,13 @@
+{
+  "name": "rust-mission-control",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Painel web local para criar, manter e configurar servidores Rust Dedicated.",
+  "scripts": {
+    "build": "npm --prefix web run build",
+    "start": "npm --prefix agent start",
+    "dev": "npm --prefix agent run dev",
+    "test": "npm --prefix agent test",
+    "install:all": "npm --prefix agent install && npm --prefix web install"
+  }
+}

@@ -1,0 +1,597 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { spawn } from 'node:child_process';
+import { RconClient } from './rcon.js';
+import { logBus } from './logbus.js';
+import { updateServerFiles } from './steamcmd.js';
+import { serverLogsDir } from './paths.js';
+import { recordSample } from './db.js';
+import { createLineSplitter } from './lines.js';
+import { parsePlayerList } from './playerlist.js';
+
+const READY_RE = /server startup complete|steamServer initialized|server initialized/i;
+const PLAYER_POLL_MS = 15000;
+const MAX_RESTARTS = 5;
+const RESTART_WINDOW_MS = 10 * 60 * 1000;
+const HEALTHY_UPTIME_MS = 5 * 60 * 1000;
+
+export class ConflictError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'ConflictError';
+    this.status = 409;
+  }
+}
+
+export class ServerRuntime {
+  constructor(server) {
+    this.server = server;
+    this.state = 'stopped';
+    this.remote = server.mode === 'remote';
+    this.child = null;
+    this.pid = null;
+    this.startedAt = null;
+    this.stoppedAt = null;
+    this.lastError = null;
+    this.players = null;
+    this.playerNames = [];
+    this.maxPlayers = server.maxPlayers;
+    this.rcon = null;
+    this.busy = false;
+    this.intentionalStop = false;
+    this.restartCount = 0;
+    this.restartTimer = null;
+    this.readyTimer = null;
+    this.playerTimer = null;
+    this.logStream = null;
+    this.logStreamDay = null;
+    this.lastLines = [];
+  }
+
+  applyConfig(server) {
+    const rconChanged =
+      this.server.rconPort !== server.rconPort ||
+      this.server.rconPassword !== server.rconPassword ||
+      this.server.host !== server.host;
+    this.server = server;
+    this.remote = server.mode === 'remote';
+    this.maxPlayers = server.maxPlayers;
+    if (rconChanged && this.state === 'running') {
+      this.#log('agent', 'Configuração de RCON mudou; reinicie o servidor para aplicar.');
+    }
+  }
+
+  status() {
+    const executable = this.#executablePath();
+    const override = this.server.startedAtOverride;
+    const uptimeBase = override ?? this.startedAt;
+    const uptimeSource = override ? 'manual' : this.startedAt ? (this.remote ? 'session' : 'process') : null;
+    return {
+      id: this.server.id,
+      mode: this.server.mode,
+      host: this.remote ? this.server.host : '127.0.0.1',
+      state: this.state,
+      pid: this.pid,
+      startedAt: this.startedAt,
+      stoppedAt: this.stoppedAt,
+      uptimeMs:
+        uptimeBase && this.state !== 'stopped' && this.state !== 'error'
+          ? Math.max(0, Date.now() - uptimeBase)
+          : 0,
+      uptimeSource,
+      players: this.players,
+      playerNames: this.playerNames,
+      maxPlayers: this.maxPlayers,
+      rconConnected: Boolean(this.rcon?.connected),
+      lastError: this.lastError,
+      autoRestart: this.server.autoRestart,
+      autoUpdate: this.server.autoUpdate,
+      install: this.remote
+        ? null
+        : {
+            installed: fs.existsSync(executable),
+            executable,
+            steamCmd: Boolean(
+              this.server.steamCmdDir &&
+                fs.existsSync(
+                  path.join(this.server.steamCmdDir, process.platform === 'win32' ? 'steamcmd.exe' : 'steamcmd.sh'),
+                ),
+            ),
+          },
+    };
+  }
+
+  async start({ skipUpdate = false } = {}) {
+    this.#assertIdle();
+    if (this.state === 'running' || this.state === 'starting') {
+      throw new ConflictError('O servidor já está em execução.');
+    }
+    if (this.remote) return this.#connectRemote();
+    this.busy = true;
+    this.intentionalStop = false;
+    this.lastError = null;
+    try {
+      if (this.server.autoUpdate && !skipUpdate) {
+        const result = await this.update();
+        if (!result.ok) {
+          const installed = fs.existsSync(this.#executablePath());
+          this.#log(
+            'agent',
+            installed
+              ? `Aviso: atualização falhou (${result.error ?? `código ${result.code}`}). Iniciando com a instalação existente.`
+              : `Atualização falhou (${result.error ?? `código ${result.code}`}) e não há instalação local.`,
+          );
+          if (!installed) throw new Error('Não foi possível instalar o servidor: a atualização pelo SteamCMD falhou.');
+        }
+      }
+      this.#spawn();
+    } finally {
+      this.busy = false;
+    }
+    return this.status();
+  }
+
+  async stop({ graceful = true } = {}) {
+    if (this.state === 'stopped' || this.state === 'error') {
+      return this.status();
+    }
+    if (this.busy) throw new ConflictError('Outra operação está em andamento.');
+    if (this.remote) {
+      this.intentionalStop = true;
+      this.rcon?.stop();
+      this.rcon = null;
+      clearInterval(this.playerTimer);
+      this.players = null;
+      this.stoppedAt = Date.now();
+      this.#setState('stopped');
+      this.#log('agent', 'Desconectado do servidor remoto.');
+      return this.status();
+    }
+    this.busy = true;
+    this.intentionalStop = true;
+    clearTimeout(this.restartTimer);
+    this.#setState('stopping');
+    try {
+      const canQuit = graceful && this.rcon?.connected;
+      if (canQuit) {
+        this.#log('agent', 'Enviando "quit" via RCON...');
+        try {
+          await this.rcon.send('quit', 5000);
+        } catch {
+          /* segue para o kill */
+        }
+      }
+      const exited = await this.#waitExit(canQuit ? 20000 : 1500);
+      if (!exited && this.pid) {
+        this.#log('agent', 'Encerrando processo à força (árvore de processos).');
+        await killTree(this.pid);
+        await this.#waitExit(8000);
+      }
+    } finally {
+      this.busy = false;
+    }
+    return this.status();
+  }
+
+  async restart(options = {}) {
+    await this.stop();
+    return this.start(options);
+  }
+
+  async update() {
+    if (this.remote) {
+      throw new ConflictError('Servidor remoto: atualize os arquivos na máquina de origem.');
+    }
+    if (this.state === 'running' || this.state === 'starting' || this.state === 'stopping') {
+      throw new ConflictError('Pare o servidor antes de atualizar.');
+    }
+    const previous = this.state;
+    this.#setState('updating');
+    this.#log('agent', 'Iniciando atualização via SteamCMD (app 258550)...');
+    const result = await updateServerFiles(this.server, {
+      onLine: ({ stream, line }) => this.#log(stream, line),
+    });
+    this.#setState(previous === 'error' ? 'error' : 'stopped');
+    if (result.ok) {
+      this.#log('agent', 'Atualização concluída.');
+    } else {
+      this.lastError = result.error ?? `SteamCMD retornou código ${result.code}`;
+      this.#log('agent', `Atualização falhou: ${this.lastError}`);
+    }
+    return result;
+  }
+
+  async command(command) {
+    if (!this.rcon?.connected) throw new ConflictError('RCON não está conectado.');
+    const response = await this.rcon.send(command);
+    this.#log('rcon', `> ${command}`);
+    if (response) this.#log('rcon', response);
+    return response;
+  }
+
+  dispose() {
+    clearTimeout(this.restartTimer);
+    clearTimeout(this.readyTimer);
+    clearInterval(this.playerTimer);
+    this.rcon?.stop();
+    this.#closeLogStream();
+  }
+
+  async #connectRemote() {
+    this.busy = true;
+    this.intentionalStop = false;
+    this.lastError = null;
+    this.startedAt = null;
+    this.#setState('starting');
+    this.#log('agent', `Conectando ao RCON remoto em ${this.server.host}:${this.server.rconPort}...`);
+    this.#startRcon();
+    const connected = await this.#waitRcon(15000);
+    this.busy = false;
+    if (!connected) {
+      this.rcon?.stop();
+      this.rcon = null;
+      this.lastError = `Não foi possível conectar ao RCON em ${this.server.host}:${this.server.rconPort}. Verifique a porta, a senha e o firewall.`;
+      this.#setState('error');
+      this.#log('agent', this.lastError);
+      throw new Error(this.lastError);
+    }
+    return this.status();
+  }
+
+  #waitRcon(timeoutMs) {
+    if (this.rcon?.connected) return Promise.resolve(true);
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this.rcon?.off('connection', onConnection);
+        resolve(false);
+      }, timeoutMs);
+      const onConnection = (connected) => {
+        if (!connected) return;
+        clearTimeout(timer);
+        this.rcon?.off('connection', onConnection);
+        resolve(true);
+      };
+      this.rcon?.on('connection', onConnection);
+    });
+  }
+
+  #assertIdle() {
+    if (this.busy) throw new ConflictError('Outra operação está em andamento.');
+  }
+
+  #executablePath() {
+    const exe = this.server.executable;
+    return path.isAbsolute(exe) ? exe : path.join(this.server.installDir, exe);
+  }
+
+  #buildArgs(logFile) {
+    const s = this.server;
+    return [
+      ...s.executableArgs,
+      '-batchmode',
+      '-nographics',
+      '+server.hostname',
+      s.hostname,
+      '+server.port',
+      String(s.port),
+      '+server.identity',
+      s.identity,
+      '+server.seed',
+      String(s.seed),
+      '+server.worldsize',
+      String(s.worldSize),
+      '+server.maxplayers',
+      String(s.maxPlayers),
+      '+server.saveinterval',
+      String(s.saveInterval),
+      '+rcon.port',
+      String(s.rconPort),
+      '+rcon.password',
+      s.rconPassword,
+      '+rcon.web',
+      '1',
+      '-logFile',
+      logFile,
+      ...s.extraArgs,
+    ];
+  }
+
+  #spawn() {
+    const executable = this.#executablePath();
+    if (!fs.existsSync(executable)) {
+      this.lastError = `Executável não encontrado: ${executable}. Rode a atualização para instalar o servidor.`;
+      this.#setState('error');
+      throw new Error(this.lastError);
+    }
+    if (!fs.existsSync(this.server.installDir)) {
+      throw new Error(`Pasta de instalação inexistente: ${this.server.installDir}`);
+    }
+
+    const logFile = path.join(serverLogsDir(this.server.id), `rust-${stamp()}.log`);
+    const args = this.#buildArgs(logFile);
+    this.#log('agent', `Iniciando: ${executable} (porta ${this.server.port}, RCON ${this.server.rconPort})`);
+
+    const child = spawn(executable, args, {
+      cwd: this.server.installDir,
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    this.child = child;
+    this.pid = child.pid ?? null;
+    this.startedAt = Date.now();
+    this.stoppedAt = null;
+    this.players = 0;
+    this.#setState('starting');
+
+    const out = createLineSplitter((line) => this.#handleLine('stdout', line));
+    const err = createLineSplitter((line) => this.#handleLine('stderr', line));
+    child.stdout.on('data', out.push);
+    child.stderr.on('data', err.push);
+
+    this.readyTimer = setTimeout(() => {
+      if (this.state === 'starting') {
+        this.#log('agent', 'O servidor não confirmou inicialização em 3 minutos; mantendo o processo ativo.');
+        this.#setState('running');
+      }
+    }, 180000);
+
+    child.on('error', (error) => {
+      this.lastError = error.message;
+      this.#log('agent', `Falha ao executar: ${error.message}`);
+      this.#setState('error');
+    });
+
+    child.on('close', (code, signal) => {
+      out.flush();
+      err.flush();
+      clearTimeout(this.readyTimer);
+      clearInterval(this.playerTimer);
+      this.rcon?.stop();
+      this.rcon = null;
+      this.#closeLogStream();
+      this.child = null;
+      this.pid = null;
+      this.stoppedAt = Date.now();
+      this.players = null;
+      this.#log('agent', `Processo encerrado (código ${code ?? 'null'}${signal ? `, sinal ${signal}` : ''}).`);
+
+      const wasIntentional = this.intentionalStop || this.state === 'stopping';
+      this.#setState(!wasIntentional && code !== 0 ? 'error' : 'stopped');
+      if (!wasIntentional) this.#scheduleRestart();
+    });
+
+    this.#startRcon();
+  }
+
+  #startRcon() {
+    this.rcon?.stop();
+    const rcon = new RconClient({
+      host: this.remote ? this.server.host : '127.0.0.1',
+      port: this.server.rconPort,
+      password: this.server.rconPassword,
+      label: this.server.id,
+    });
+    rcon.on('log', ({ line }) => this.#log('rcon', line));
+    rcon.on('connection', (connected) => {
+      if (connected) {
+        this.#pollPlayers();
+        this.playerTimer = setInterval(() => this.#pollPlayers(), PLAYER_POLL_MS);
+        if (this.remote && this.state === 'starting') {
+          this.startedAt = Date.now();
+          this.#setState('running');
+        }
+      } else {
+        clearInterval(this.playerTimer);
+        if (this.remote && this.state === 'running' && !this.intentionalStop) {
+          this.lastError = 'Conexão RCON perdida.';
+          this.#setState('error');
+        }
+      }
+      logBus.status(this.server.id, this.status());
+    });
+    rcon.on('message', (message) => {
+      if (message?.Type === 'Chat') {
+        this.#log('chat', formatChat(message));
+      } else if (message?.Message) {
+        this.#log('rcon', String(message.Message));
+      }
+    });
+    this.rcon = rcon;
+    rcon.start();
+  }
+
+  async #pollPlayers() {
+    if (!this.rcon?.connected) return;
+    try {
+      const response = await this.rcon.send('playerlist', 8000);
+      const parsed = parsePlayerList(response);
+      if (!parsed) {
+        this.#log('rcon', `playerlist sem formato reconhecido: ${String(response).slice(0, 200)}`);
+        return;
+      }
+      this.players = parsed.players;
+      if (parsed.maxPlayers) this.maxPlayers = parsed.maxPlayers;
+      this.playerNames = parsed.names;
+      logBus.status(this.server.id, this.status());
+    } catch {
+      /* silencioso: o próximo ciclo tenta de novo */
+    }
+  }
+
+  #handleLine(stream, line) {
+    if (!line.trim()) return;
+    this.#log(stream, line);
+    if (this.state === 'starting' && READY_RE.test(line)) {
+      clearTimeout(this.readyTimer);
+      this.#setState('running');
+      this.#log('agent', 'Servidor pronto.');
+    }
+  }
+
+  #scheduleRestart() {
+    if (!this.server.autoRestart) return;
+    const now = Date.now();
+    if (this.startedAt && now - this.startedAt > HEALTHY_UPTIME_MS) this.restartCount = 0;
+    if (this.restartCount >= MAX_RESTARTS) {
+      this.lastError = 'Limite de reinícios automáticos atingido. Verifique o console.';
+      this.#log('agent', this.lastError);
+      this.#setState('error');
+      return;
+    }
+    this.restartCount += 1;
+    const delay = Math.min(5000 * 2 ** (this.restartCount - 1), 60000);
+    this.#log('agent', `Reiniciando em ${Math.round(delay / 1000)}s (tentativa ${this.restartCount}/${MAX_RESTARTS}).`);
+    this.restartTimer = setTimeout(() => {
+      this.start({ skipUpdate: true }).catch((err) => {
+        this.lastError = err.message;
+        this.#log('agent', `Falha no reinício automático: ${err.message}`);
+        this.#setState('error');
+      });
+    }, delay);
+  }
+
+  #waitExit(timeoutMs) {
+    if (!this.child) return Promise.resolve(true);
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => resolve(false), timeoutMs);
+      this.child.once('close', () => {
+        clearTimeout(timer);
+        resolve(true);
+      });
+    });
+  }
+
+  #setState(state) {
+    if (this.state === state) return;
+    this.state = state;
+    recordSample(this.server.id, state, this.players);
+    logBus.status(this.server.id, this.status());
+  }
+
+  #log(stream, line) {
+    const entry = logBus.push(this.server.id, { stream, line });
+    this.lastLines.push(entry);
+    if (this.lastLines.length > 200) this.lastLines.shift();
+    this.#writeLogFile(line);
+  }
+
+  #writeLogFile(line) {
+    try {
+      const day = new Date().toISOString().slice(0, 10);
+      if (this.logStreamDay !== day) {
+        this.#closeLogStream();
+        const file = path.join(serverLogsDir(this.server.id), `console-${day}.log`);
+        this.logStream = fs.createWriteStream(file, { flags: 'a' });
+        this.logStreamDay = day;
+      }
+      this.logStream.write(`${new Date().toISOString()} ${line}\n`);
+    } catch {
+      /* não deixa a escrita de log derrubar o agente */
+    }
+  }
+
+  #closeLogStream() {
+    if (this.logStream) {
+      this.logStream.end();
+      this.logStream = null;
+    }
+  }
+}
+
+export function formatChat(message) {
+  const raw = message?.Message;
+  let payload = null;
+
+  if (typeof raw === 'string') {
+    const text = raw.trim();
+    if (text.startsWith('{')) {
+      try {
+        payload = JSON.parse(text);
+      } catch {
+        payload = null;
+      }
+    }
+  } else if (raw && typeof raw === 'object') {
+    payload = raw;
+  }
+
+  if (!payload) return typeof raw === 'string' ? raw : String(raw ?? '');
+
+  const username = String(payload.Username ?? '').trim();
+  const body = String(payload.Message ?? '').trim();
+
+  if (!body) return username || '(chat vazio)';
+  if (!username) return body;
+
+  return `${username}: ${body}`;
+}
+
+export function killTree(pid) {
+  return new Promise((resolve) => {
+    if (process.platform !== 'win32') {
+      try {
+        process.kill(-pid, 'SIGKILL');
+      } catch {
+        try {
+          process.kill(pid, 'SIGKILL');
+        } catch {
+          /* ignora */
+        }
+      }
+      resolve();
+      return;
+    }
+    const killer = spawn('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true });
+    killer.on('close', () => resolve());
+    killer.on('error', () => resolve());
+  });
+}
+
+function stamp() {
+  return new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+}
+
+export class RuntimeManager {
+  constructor() {
+    this.runtimes = new Map();
+  }
+
+  sync(servers) {
+    const ids = new Set(servers.map((server) => server.id));
+    for (const [id, runtime] of this.runtimes) {
+      if (!ids.has(id)) {
+        runtime.dispose();
+        this.runtimes.delete(id);
+      }
+    }
+    for (const server of servers) {
+      const runtime = this.runtimes.get(server.id);
+      if (runtime) runtime.applyConfig(server);
+      else this.runtimes.set(server.id, new ServerRuntime(server));
+    }
+  }
+
+  get(id) {
+    return this.runtimes.get(id) ?? null;
+  }
+
+  all() {
+    return [...this.runtimes.values()];
+  }
+
+  async shutdown() {
+    await Promise.all(
+      this.all().map(async (runtime) => {
+        try {
+          await runtime.stop();
+        } catch {
+          /* ignora */
+        }
+        runtime.dispose();
+      }),
+    );
+  }
+}
+
+export const runtimeManager = new RuntimeManager();

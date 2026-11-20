@@ -1,0 +1,373 @@
+@if (!server()) {
+  <div class="empty">{{ 'server.loading' | t }}</div>
+} @else {
+  @let s = server()!;
+
+  <a class="back" routerLink="/">{{ 'server.back' | t }}</a>
+
+  <header class="server-head">
+    <div class="title">
+      <h1>{{ s.name }}</h1>
+      <div class="meta">
+        <span [class]="pillClass(s.status?.state)">{{ stateLabel(s.status?.state) }}</span>
+        <span class="mono muted">{{ s.identity }}</span>
+        <span class="muted">{{ 'server.port' | t }} {{ s.port }}</span>
+        <span class="muted">{{ 'common.uptime' | t }} {{ uptime(s.status?.uptimeMs) }}</span>
+      </div>
+    </div>
+    <div class="head-actions">
+      @if (isRemote()) {
+        @if (s.status?.state === 'running' || s.status?.state === 'starting') {
+          <button class="btn danger" type="button" [disabled]="busy()" (click)="stop()">
+            {{ 'dash.disconnect' | t }}
+          </button>
+        } @else {
+          <button class="btn primary" type="button" [disabled]="busy()" (click)="start()">
+            {{ 'dash.connect' | t }}
+          </button>
+        }
+      } @else {
+        @if (s.status?.state === 'running' || s.status?.state === 'starting') {
+          <button class="btn danger" type="button" [disabled]="busy()" (click)="stop()">
+            {{ 'dash.stop' | t }}
+          </button>
+          <button class="btn" type="button" [disabled]="busy()" (click)="restart()">
+            {{ 'dash.restart' | t }}
+          </button>
+        } @else {
+          <button class="btn primary" type="button" [disabled]="busy()" (click)="start()">
+            {{ 'dash.start' | t }}
+          </button>
+        }
+        <button class="btn" type="button" [disabled]="busy()" (click)="updateFiles()">
+          {{ 'server.updateFiles' | t }}
+        </button>
+      }
+    </div>
+  </header>
+
+  @if (error()) {
+    <div class="error-box dismissible">
+      {{ error() }}
+      <button type="button" class="close" (click)="error.set(null)">×</button>
+    </div>
+  }
+  @if (notice()) {
+    <div class="notice dismissible">
+      {{ notice() }}
+      <button type="button" class="close" (click)="notice.set(null)">×</button>
+    </div>
+  }
+
+  <nav class="tabs">
+    <button type="button" [class.active]="tab() === 'console'" (click)="setTab('console')">
+      {{ 'server.tab.console' | t }}
+    </button>
+    @if (!isRemote()) {
+      <button type="button" [class.active]="tab() === 'config'" (click)="setTab('config')">server.cfg</button>
+      <button type="button" [class.active]="tab() === 'backups'" (click)="setTab('backups')">
+        {{ 'server.tab.backups' | t }}
+      </button>
+    }
+    <button type="button" [class.active]="tab() === 'settings'" (click)="setTab('settings')">
+      {{ 'server.tab.settings' | t }}
+    </button>
+  </nav>
+
+  @switch (tab()) {
+    @case ('console') {
+      <section class="panel console-panel">
+        <div class="console-tools">
+          <input
+            type="search"
+            [placeholder]="'server.filter' | t"
+            [ngModel]="filter()"
+            (ngModelChange)="filter.set($event)"
+          />
+          <label class="check">
+            <input type="checkbox" [ngModel]="autoscroll()" (ngModelChange)="autoscroll.set($event)" />
+            {{ 'server.autoscroll' | t }}
+          </label>
+          <button class="btn sm ghost" type="button" (click)="logs.set([])">{{ 'common.clear' | t }}</button>
+        </div>
+
+        <div class="console" #logBox>
+          @for (entry of visibleLogs(); track $index) {
+            <div class="line" [class]="entry.stream">
+              <span class="ts">{{ date(entry.ts) }}</span>
+              <span class="stream">{{ entry.stream }}</span>
+              <span class="text">{{ entry.line }}</span>
+            </div>
+          } @empty {
+            <div class="console-empty">{{ 'server.emptyConsole' | t }}</div>
+          }
+        </div>
+
+        <form class="command" (ngSubmit)="sendCommand()">
+          <span class="prompt mono">RCON ›</span>
+          <input
+            name="command"
+            [placeholder]="'server.commandPlaceholder' | t"
+            [ngModel]="command()"
+            (ngModelChange)="command.set($event)"
+            [disabled]="!s.status?.rconConnected"
+          />
+          <button class="btn sm primary" type="submit" [disabled]="!s.status?.rconConnected || !command().trim()">
+            {{ 'common.send' | t }}
+          </button>
+        </form>
+        @if (!s.status?.rconConnected) {
+          <p class="hint">{{ 'server.rconOffline' | t }}</p>
+        }
+      </section>
+    }
+
+    @case ('config') {
+      <section class="panel config-panel">
+        <div class="panel-head">
+          <div>
+            <h2>server.cfg</h2>
+            <p class="muted mono small">{{ config()?.path }}</p>
+          </div>
+          <button class="btn primary" type="button" [disabled]="configSaving()" (click)="saveConfig()">
+            @if (configSaving()) {
+              <span class="spinner"></span>
+            }
+            {{ 'common.save' | t }}
+          </button>
+        </div>
+
+        @if (config() && !config()!.exists) {
+          <p class="hint">{{ 'server.configMissing' | t }}</p>
+        }
+
+        @for (group of groups(); track group.name) {
+          <fieldset>
+            <legend>{{ group.name }}</legend>
+            <div class="config-grid">
+              @for (field of group.fields; track field.key) {
+                <div class="field">
+                  <label [for]="field.key">{{ field.label }}</label>
+                  @if (field.type === 'bool') {
+                    <label class="switch">
+                      <input
+                        [id]="field.key"
+                        type="checkbox"
+                        [ngModel]="configDraft()[field.key]"
+                        (ngModelChange)="setValue(field, $event)"
+                      />
+                      <span>{{ (configDraft()[field.key] ? 'common.enabled' : 'common.disabled') | t }}</span>
+                    </label>
+                  } @else if (field.type === 'int' || field.type === 'float') {
+                    <input
+                      [id]="field.key"
+                      type="number"
+                      [step]="field.type === 'float' ? 0.1 : 1"
+                      [min]="field.min ?? null"
+                      [max]="field.max ?? null"
+                      [ngModel]="configDraft()[field.key]"
+                      (ngModelChange)="setValue(field, $event)"
+                    />
+                  } @else {
+                    <input
+                      [id]="field.key"
+                      [type]="field.secret ? 'password' : 'text'"
+                      [ngModel]="configDraft()[field.key]"
+                      (ngModelChange)="setValue(field, $event)"
+                    />
+                  }
+                  <span class="hint mono">{{ field.key }}</span>
+                </div>
+              }
+            </div>
+          </fieldset>
+        }
+
+        @if (config()?.unknown?.length) {
+          <details class="unknown">
+            <summary>{{ config()!.unknown.length }} {{ 'server.preserved' | t }}</summary>
+            <pre class="mono">{{ config()!.unknown.join('\n') }}</pre>
+          </details>
+        }
+      </section>
+    }
+
+    @case ('backups') {
+      <section class="panel backups-panel">
+        <div class="panel-head">
+          <div>
+            <h2>{{ 'server.backups.title' | t }}</h2>
+            <p class="muted small">
+              {{ 'server.backups.subtitle' | t }} <span class="mono">{{ s.identity }}</span>.
+            </p>
+          </div>
+          <button class="btn primary" type="button" [disabled]="backupBusy() === 'create'" (click)="createBackup()">
+            @if (backupBusy() === 'create') {
+              <span class="spinner"></span>
+            }
+            {{ 'server.backups.create' | t }}
+          </button>
+        </div>
+
+        @if (!backups().length) {
+          <div class="empty">{{ 'server.backups.empty' | t }}</div>
+        } @else {
+          <ul class="backup-list">
+            @for (backup of backups(); track backup.name) {
+              <li>
+                <div class="backup-info">
+                  <span class="mono">{{ backup.name }}</span>
+                  <span class="muted small">{{ date(backup.createdAt) }} · {{ size(backup.size) }}</span>
+                </div>
+                <div class="backup-actions">
+                  <button
+                    class="btn sm"
+                    type="button"
+                    [disabled]="backupBusy() === backup.name || s.status?.state === 'running'"
+                    (click)="restore(backup)"
+                  >
+                    {{ 'common.restore' | t }}
+                  </button>
+                  <button
+                    class="btn sm danger"
+                    type="button"
+                    [disabled]="backupBusy() === backup.name"
+                    (click)="removeBackup(backup)"
+                  >
+                    {{ 'common.delete' | t }}
+                  </button>
+                </div>
+              </li>
+            }
+          </ul>
+        }
+        @if (s.status?.state === 'running') {
+          <p class="hint">{{ 'server.backups.stopFirst' | t }}</p>
+        }
+      </section>
+    }
+
+    @case ('settings') {
+      <section class="panel settings-panel">
+        <div class="panel-head">
+          <h2>{{ 'server.settings.title' | t }}</h2>
+          <button class="btn primary" type="button" [disabled]="busy()" (click)="saveSettings()">
+            @if (busy()) {
+              <span class="spinner"></span>
+            }
+            {{ 'common.save' | t }}
+          </button>
+        </div>
+
+        <div class="config-grid">
+          <div class="field">
+            <label for="s-name">{{ 'server.settings.name' | t }}</label>
+            <input id="s-name" name="s-name" [(ngModel)]="settings.name" />
+          </div>
+          <div class="field">
+            <label for="s-mode">{{ 'server.settings.mode' | t }}</label>
+            <select id="s-mode" name="s-mode" [(ngModel)]="settings.mode">
+              <option value="local">{{ 'server.settings.modeLocal' | t }}</option>
+              <option value="remote">{{ 'server.settings.modeRemote' | t }}</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="s-host">{{ 'server.settings.host' | t }}</label>
+            <input id="s-host" name="s-host" [(ngModel)]="settings.host" [disabled]="settings.mode === 'local'" />
+            <span class="hint">{{ 'server.settings.hostHint' | t }}</span>
+          </div>
+          <div class="field">
+            <label for="s-hostname">{{ 'server.settings.hostname' | t }}</label>
+            <input id="s-hostname" name="s-hostname" [(ngModel)]="settings.hostname" />
+          </div>
+          <div class="field">
+            <label for="s-port">{{ 'server.settings.gamePort' | t }}</label>
+            <input id="s-port" name="s-port" type="number" [(ngModel)]="settings.port" min="1" max="65535" />
+          </div>
+          <div class="field">
+            <label for="s-rcon">{{ 'server.settings.rconPort' | t }}</label>
+            <input id="s-rcon" name="s-rcon" type="number" [(ngModel)]="settings.rconPort" min="1" max="65535" />
+          </div>
+          <div class="field">
+            <label for="s-rcon-pass">{{ 'server.settings.newPassword' | t }}</label>
+            <input
+              id="s-rcon-pass"
+              name="s-rcon-pass"
+              type="password"
+              [placeholder]="'server.settings.newPasswordPlaceholder' | t"
+              [(ngModel)]="settings.rconPassword"
+            />
+          </div>
+          <div class="field">
+            <label for="s-seed">{{ 'server.settings.seed' | t }}</label>
+            <input id="s-seed" name="s-seed" type="number" [(ngModel)]="settings.seed" />
+          </div>
+          <div class="field">
+            <label for="s-world">{{ 'server.settings.worldSize' | t }}</label>
+            <input id="s-world" name="s-world" type="number" [(ngModel)]="settings.worldSize" min="1000" max="6000" />
+          </div>
+          <div class="field">
+            <label for="s-max">{{ 'server.settings.maxPlayers' | t }}</label>
+            <input id="s-max" name="s-max" type="number" [(ngModel)]="settings.maxPlayers" min="1" max="1000" />
+          </div>
+          <div class="field">
+            <label for="s-save">{{ 'server.settings.saveInterval' | t }}</label>
+            <input id="s-save" name="s-save" type="number" [(ngModel)]="settings.saveInterval" min="30" max="3600" />
+          </div>
+          <div class="field">
+            <label for="s-start">{{ 'server.settings.startedAt' | t }}</label>
+            <input id="s-start" name="s-start" type="datetime-local" [(ngModel)]="settings.startedAt" />
+            <span class="hint">{{ 'server.settings.startedAtHint' | t }}</span>
+          </div>
+        </div>
+
+        <div class="toggles">
+          <label class="switch">
+            <input type="checkbox" name="autoUpdate" [(ngModel)]="settings.autoUpdate" />
+            <span>{{ 'server.settings.autoUpdate' | t }}</span>
+          </label>
+          <label class="switch">
+            <input type="checkbox" name="autoRestart" [(ngModel)]="settings.autoRestart" />
+            <span>{{ 'server.settings.autoRestart' | t }}</span>
+          </label>
+        </div>
+
+        @if (isRemote()) {
+          <div class="paths">
+            <p><span class="muted">{{ 'server.settings.modeLabel' | t }}</span> {{ 'server.settings.remoteMode' | t }}</p>
+            <p>
+              <span class="muted">{{ 'server.settings.hostLabel' | t }}</span>
+              <span class="mono">{{ s.host }}:{{ s.rconPort }}</span>
+            </p>
+            <p class="muted small">{{ 'server.settings.remoteNote' | t }}</p>
+          </div>
+        } @else {
+          <div class="paths">
+            <p>
+              <span class="muted">{{ 'server.settings.install' | t }}</span>
+              <span class="mono">{{ s.installDir }}</span>
+            </p>
+            <p><span class="muted">SteamCMD:</span> <span class="mono">{{ s.steamCmdDir }}</span></p>
+            <p>
+              <span class="muted">{{ 'server.settings.executable' | t }}</span>
+              <span class="mono">{{ s.status?.install?.executable }}</span>
+              @if (s.status?.install && !s.status?.install?.installed) {
+                <span class="bad">{{ 'common.notFound' | t }}</span>
+              }
+            </p>
+          </div>
+        }
+
+        <div class="danger-zone">
+          <div>
+            <h3>{{ 'server.settings.dangerTitle' | t }}</h3>
+            <p class="muted small">{{ 'server.settings.dangerNote' | t }}</p>
+          </div>
+          <button class="btn danger" type="button" (click)="removeServer()">
+            {{ 'server.settings.dangerAction' | t }}
+          </button>
+        </div>
+      </section>
+    }
+  }
+}

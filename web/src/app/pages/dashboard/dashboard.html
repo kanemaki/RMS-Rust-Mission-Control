@@ -1,0 +1,307 @@
+<section class="page-head">
+  <div>
+    <h1>{{ 'dash.title' | t }}</h1>
+    <p class="muted">{{ 'dash.subtitle' | t }}</p>
+  </div>
+  <div class="head-buttons">
+    <button class="btn" type="button" (click)="openPanel('import')">
+      {{ panel() === 'import' ? ('common.cancel' | t) : ('dash.addExisting' | t) }}
+    </button>
+    <button class="btn primary" type="button" (click)="openPanel('create')">
+      {{ panel() === 'create' ? ('common.cancel' | t) : ('dash.newServer' | t) }}
+    </button>
+  </div>
+</section>
+
+@if (error()) {
+  <div class="error-box">{{ error() }}</div>
+}
+
+@if (panel() === 'create') {
+  <form class="panel create" (ngSubmit)="create()">
+    <header class="form-head">
+      <h2>{{ 'create.title' | t }}</h2>
+      <p class="muted small">{{ 'create.subtitle' | t }}</p>
+    </header>
+    <div class="grid">
+      <div class="field">
+        <label for="name">{{ 'create.name' | t }}</label>
+        <input
+          id="name"
+          name="name"
+          [(ngModel)]="createDraft.name"
+          [placeholder]="'create.namePlaceholder' | t"
+          required
+        />
+      </div>
+      <div class="field">
+        <label for="identity">{{ 'create.identity' | t }}</label>
+        <input id="identity" name="identity" [(ngModel)]="createDraft.identity" placeholder="my_server" required />
+        <span class="hint">{{ 'create.identityHint' | t }}</span>
+      </div>
+      <div class="field">
+        <label for="installDirNew">{{ 'create.installDir' | t }}</label>
+        <input
+          id="installDirNew"
+          name="installDirNew"
+          [(ngModel)]="createDraft.installDir"
+          placeholder="C:\RustServer\rustds"
+          required
+        />
+        <span class="hint">{{ 'create.installDirHint' | t }}</span>
+      </div>
+      <div class="field">
+        <label for="port">{{ 'create.gamePort' | t }}</label>
+        <input id="port" name="port" type="number" [(ngModel)]="createDraft.port" min="1" max="65535" required />
+      </div>
+      <div class="field">
+        <label for="rconPort">{{ 'create.rconPort' | t }}</label>
+        <input
+          id="rconPort"
+          name="rconPort"
+          type="number"
+          [(ngModel)]="createDraft.rconPort"
+          min="1"
+          max="65535"
+          required
+        />
+      </div>
+      <div class="field">
+        <label for="rconPassword">{{ 'create.rconPassword' | t }}</label>
+        <input id="rconPassword" name="rconPassword" [(ngModel)]="createDraft.rconPassword" required />
+        <span class="hint">{{ 'create.rconPasswordHint' | t }}</span>
+      </div>
+      <div class="field">
+        <label for="seed">{{ 'create.seed' | t }}</label>
+        <input id="seed" name="seed" type="number" [(ngModel)]="createDraft.seed" />
+      </div>
+      <div class="field">
+        <label for="worldSize">{{ 'create.worldSize' | t }}</label>
+        <input
+          id="worldSize"
+          name="worldSize"
+          type="number"
+          [(ngModel)]="createDraft.worldSize"
+          min="1000"
+          max="6000"
+        />
+      </div>
+      <div class="field">
+        <label for="maxPlayers">{{ 'create.maxPlayers' | t }}</label>
+        <input
+          id="maxPlayers"
+          name="maxPlayers"
+          type="number"
+          [(ngModel)]="createDraft.maxPlayers"
+          min="1"
+          max="1000"
+        />
+      </div>
+    </div>
+    <div class="actions">
+      <button class="btn primary" type="submit" [disabled]="creating() || !canCreate()">
+        @if (creating()) {
+          <span class="spinner"></span>
+        }
+        {{ 'create.submit' | t }}
+      </button>
+    </div>
+  </form>
+}
+
+@if (panel() === 'import') {
+  <form class="panel create" (ngSubmit)="importServer()">
+    <header class="form-head">
+      <h2>{{ 'import.title' | t }}</h2>
+      <p class="muted small">{{ 'import.subtitle' | t }}</p>
+    </header>
+
+    <div class="segmented">
+      <button type="button" [class.active]="importKind() === 'local'" (click)="importKind.set('local')">
+        {{ 'import.local' | t }}
+      </button>
+      <button type="button" [class.active]="importKind() === 'remote'" (click)="importKind.set('remote')">
+        {{ 'import.remote' | t }}
+      </button>
+    </div>
+
+    @if (importKind() === 'local') {
+      <div class="scan-row">
+        <div class="field">
+          <label for="installDir">{{ 'create.installDir' | t }}</label>
+          <input
+            id="installDir"
+            name="installDir"
+            [(ngModel)]="importDraft.installDir"
+            placeholder="C:\RustServer\rustds"
+          />
+          <span class="hint">{{ 'import.installDirHint' | t }}</span>
+        </div>
+        <button class="btn" type="button" [disabled]="scanning() || !importDraft.installDir" (click)="scanInstall()">
+          @if (scanning()) {
+            <span class="spinner"></span>
+          }
+          {{ 'common.scan' | t }}
+        </button>
+      </div>
+
+      @if (scan(); as result) {
+        @if (!result.installed) {
+          <p class="warn-line">{{ 'import.noExe' | t }}</p>
+        }
+        @if (!result.identities.length) {
+          <p class="warn-line">{{ 'import.noIdentities' | t }}</p>
+        } @else {
+          <div class="field">
+            <label>{{ 'import.identities' | t }}</label>
+            <div class="identity-list">
+              @for (item of result.identities; track item.identity) {
+                <button
+                  type="button"
+                  class="identity"
+                  [class.active]="selected()?.identity === item.identity"
+                  (click)="selectIdentity(item)"
+                >
+                  <span class="mono">{{ item.identity }}</span>
+                  <span class="muted small">
+                    {{ (item.hasSave ? 'import.hasSave' : 'import.noSave') | t }} ·
+                    {{ (item.hasConfig ? 'import.hasConfig' : 'import.noConfig') | t }}
+                  </span>
+                </button>
+              }
+            </div>
+          </div>
+
+          <div class="field">
+            <label>{{ 'import.manage' | t }}</label>
+            <div class="segmented">
+              <button type="button" [class.active]="manage() === 'attach'" (click)="manage.set('attach')">
+                {{ 'import.attach' | t }}
+              </button>
+              <button type="button" [class.active]="manage() === 'process'" (click)="manage.set('process')">
+                {{ 'import.process' | t }}
+              </button>
+            </div>
+            <span class="hint">
+              {{ (manage() === 'attach' ? 'import.attachHint' : 'import.processHint') | t }}
+            </span>
+          </div>
+        }
+      }
+    } @else {
+      <div class="field">
+        <label for="host">{{ 'import.host' | t }}</label>
+        <input id="host" name="host" [(ngModel)]="importDraft.host" placeholder="203.0.113.10" required />
+        <span class="hint">{{ 'import.hostHint' | t }}</span>
+      </div>
+    }
+
+    @if (importKind() === 'remote' || selected()) {
+      <div class="grid">
+        <div class="field">
+          <label for="i-name">{{ 'import.name' | t }}</label>
+          <input id="i-name" name="i-name" [(ngModel)]="importDraft.name" required />
+        </div>
+        <div class="field">
+          <label for="i-identity">{{ 'create.identity' | t }}</label>
+          <input id="i-identity" name="i-identity" [(ngModel)]="importDraft.identity" required />
+        </div>
+        <div class="field">
+          <label for="i-port">{{ 'create.gamePort' | t }}</label>
+          <input id="i-port" name="i-port" type="number" [(ngModel)]="importDraft.port" min="1" max="65535" />
+        </div>
+        <div class="field">
+          <label for="i-rcon">{{ 'create.rconPort' | t }}</label>
+          <input id="i-rcon" name="i-rcon" type="number" [(ngModel)]="importDraft.rconPort" min="1" max="65535" />
+        </div>
+        <div class="field">
+          <label for="i-rcon-pass">{{ 'create.rconPassword' | t }}</label>
+          <input
+            id="i-rcon-pass"
+            name="i-rcon-pass"
+            [placeholder]="'import.rconPasswordPlaceholder' | t"
+            [(ngModel)]="importDraft.rconPassword"
+          />
+        </div>
+      </div>
+    }
+
+    <div class="actions">
+      <button class="btn primary" type="submit" [disabled]="creating() || !canImport()">
+        @if (creating()) {
+          <span class="spinner"></span>
+        }
+        {{ 'import.submit' | t }}
+      </button>
+    </div>
+  </form>
+}
+
+@if (loading()) {
+  <div class="empty">{{ 'dash.loading' | t }}</div>
+} @else if (!servers().length) {
+  <div class="empty">{{ 'dash.empty' | t }}</div>
+} @else {
+  <div class="cards">
+    @for (server of servers(); track server.id) {
+      <article class="panel card">
+        <header class="card-head">
+          <div class="card-title">
+            <h2>{{ server.name }}</h2>
+            <span class="mono muted">{{ server.identity }}</span>
+          </div>
+          <span [class]="pillClass(server.status?.state)">{{ stateLabel(server.status?.state) }}</span>
+        </header>
+
+        <dl class="stats">
+          <div>
+            <dt>{{ 'common.players' | t }}</dt>
+            <dd>{{ server.status?.players ?? 0 }} / {{ server.status?.maxPlayers ?? server.maxPlayers }}</dd>
+          </div>
+          <div>
+            <dt>{{ uptimeLabel(server) }}</dt>
+            <dd [title]="uptimeHint(server)">{{ uptime(server.status?.uptimeMs) }}</dd>
+          </div>
+          <div>
+            <dt>{{ 'common.port' | t }}</dt>
+            <dd class="mono">{{ server.port }}</dd>
+          </div>
+          <div>
+            <dt>RCON</dt>
+            <dd>{{ (server.status?.rconConnected ? 'common.connected' : 'common.offline') | t }}</dd>
+          </div>
+        </dl>
+
+        @if (server.status?.playerNames?.length) {
+          <p class="players-line" [title]="playersTooltip(server)">
+            {{ 'common.online' | t }}: {{ playersSummary(server) }}
+          </p>
+        }
+        @if (server.status?.install && !server.status?.install?.installed) {
+          <p class="warn-line">{{ 'dash.notInstalled' | t }}</p>
+        }
+        @if (server.status?.lastError) {
+          <p class="error-line">{{ server.status?.lastError }}</p>
+        }
+
+        <footer class="card-actions">
+          <a class="btn sm" [routerLink]="['/servers', server.id]">{{ 'dash.open' | t }}</a>
+          @if (server.status?.state === 'running' || server.status?.state === 'starting') {
+            <button class="btn sm danger" type="button" [disabled]="busyId() === server.id" (click)="stop(server)">
+              {{ (server.mode === 'remote' ? 'dash.disconnect' : 'dash.stop') | t }}
+            </button>
+            @if (server.mode !== 'remote') {
+              <button class="btn sm" type="button" [disabled]="busyId() === server.id" (click)="restart(server)">
+                {{ 'dash.restart' | t }}
+              </button>
+            }
+          } @else {
+            <button class="btn sm primary" type="button" [disabled]="busyId() === server.id" (click)="start(server)">
+              {{ (server.mode === 'remote' ? 'dash.connect' : 'dash.start') | t }}
+            </button>
+          }
+        </footer>
+      </article>
+    }
+  </div>
+}

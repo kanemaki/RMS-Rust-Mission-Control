@@ -1,0 +1,28 @@
+# Dependências
+node_modules/
+agent/node_modules/
+web/node_modules/
+
+# Dados locais do agente: config.json (contém a senha do RCON), sessões,
+# banco SQLite, logs de console e backups .tar.gz das identidades.
+agent/data/
+agent/.*-data/
+
+# Build do painel, gerado por `npm run build` (web -> agent/public)
+agent/public/
+web/dist/
+web/.angular/
+
+# Ferramentas locais do ambiente (config e capturas temporárias)
+.abacusai/
+
+# Segredos e configuração de máquina
+.env
+.env.*
+!.env.example
+
+# Logs e artefatos
+*.log
+*.tsbuildinfo
+.DS_Store
+Thumbs.db

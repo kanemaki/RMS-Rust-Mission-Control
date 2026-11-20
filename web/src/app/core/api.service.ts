@@ -1,0 +1,123 @@
+import { Injectable, inject } from '@angular/core';
+import { HttpClient } from '@angular/common/http';
+import { Observable } from 'rxjs';
+import {
+  AuditEntry,
+  Backup,
+  InstallScan,
+  LogEntry,
+  Server,
+  ServerConfig,
+  ServerStatus,
+} from './models';
+
+@Injectable({ providedIn: 'root' })
+export class ApiService {
+  private readonly http = inject(HttpClient);
+
+  setupStatus(): Observable<{ needsSetup: boolean }> {
+    return this.http.get<{ needsSetup: boolean }>('/api/setup');
+  }
+
+  setup(password: string): Observable<{ ok: true }> {
+    return this.http.post<{ ok: true }>('/api/setup', { password });
+  }
+
+  login(password: string): Observable<{ ok: true }> {
+    return this.http.post<{ ok: true }>('/api/auth/login', { password });
+  }
+
+  logout(): Observable<{ ok: true }> {
+    return this.http.post<{ ok: true }>('/api/auth/logout', {});
+  }
+
+  me(): Observable<{ authenticated: true; expiresAt: number }> {
+    return this.http.get<{ authenticated: true; expiresAt: number }>('/api/auth/me');
+  }
+
+  servers(): Observable<Server[]> {
+    return this.http.get<Server[]>('/api/servers');
+  }
+
+  defaultInstallDir(): Observable<{ defaultInstallDir: string }> {
+    return this.http.get<{ defaultInstallDir: string }>('/api/discover');
+  }
+
+  discover(installDir: string): Observable<InstallScan> {
+    return this.http.post<InstallScan>('/api/discover', { installDir });
+  }
+
+  server(id: string): Observable<Server> {
+    return this.http.get<Server>(`/api/servers/${id}`);
+  }
+
+  createServer(payload: Partial<Server>): Observable<Server> {
+    return this.http.post<Server>('/api/servers', payload);
+  }
+
+  updateServer(id: string, payload: Partial<Server>): Observable<Server> {
+    return this.http.patch<Server>(`/api/servers/${id}`, payload);
+  }
+
+  deleteServer(id: string): Observable<{ ok: true }> {
+    return this.http.delete<{ ok: true }>(`/api/servers/${id}`);
+  }
+
+  start(id: string, skipUpdate = false): Observable<ServerStatus> {
+    return this.http.post<ServerStatus>(`/api/servers/${id}/start`, { skipUpdate });
+  }
+
+  stop(id: string): Observable<ServerStatus> {
+    return this.http.post<ServerStatus>(`/api/servers/${id}/stop`, {});
+  }
+
+  restart(id: string, skipUpdate = false): Observable<ServerStatus> {
+    return this.http.post<ServerStatus>(`/api/servers/${id}/restart`, { skipUpdate });
+  }
+
+  update(id: string): Observable<{ ok: boolean; code: number | null; error?: string; status: ServerStatus }> {
+    return this.http.post<{ ok: boolean; code: number | null; error?: string; status: ServerStatus }>(
+      `/api/servers/${id}/update`,
+      {},
+    );
+  }
+
+  command(id: string, command: string): Observable<{ response: string }> {
+    return this.http.post<{ response: string }>(`/api/servers/${id}/command`, { command });
+  }
+
+  logs(id: string, limit = 300): Observable<LogEntry[]> {
+    return this.http.get<LogEntry[]>(`/api/servers/${id}/logs?limit=${limit}`);
+  }
+
+  config(id: string): Observable<ServerConfig> {
+    return this.http.get<ServerConfig>(`/api/servers/${id}/config`);
+  }
+
+  saveConfig(id: string, values: Record<string, string | number | boolean>): Observable<ServerConfig> {
+    return this.http.put<ServerConfig>(`/api/servers/${id}/config`, { values });
+  }
+
+  backups(id: string): Observable<Backup[]> {
+    return this.http.get<Backup[]>(`/api/servers/${id}/backups`);
+  }
+
+  createBackup(id: string, label = 'manual'): Observable<Backup> {
+    return this.http.post<Backup>(`/api/servers/${id}/backups`, { label });
+  }
+
+  restoreBackup(id: string, name: string): Observable<{ restored: string; safetyBackup: string | null }> {
+    return this.http.post<{ restored: string; safetyBackup: string | null }>(
+      `/api/servers/${id}/backups/${encodeURIComponent(name)}/restore`,
+      {},
+    );
+  }
+
+  deleteBackup(id: string, name: string): Observable<{ ok: true }> {
+    return this.http.delete<{ ok: true }>(`/api/servers/${id}/backups/${encodeURIComponent(name)}`);
+  }
+
+  audit(limit = 100): Observable<AuditEntry[]> {
+    return this.http.get<AuditEntry[]>(`/api/audit?limit=${limit}`);
+  }
+}
