@@ -12,7 +12,7 @@ import {
 import { runtimeManager } from './process-manager.js';
 import { ConflictError } from './errors.js';
 import { logBus } from './logbus.js';
-import { readConfig, writeConfig } from './cfg.js';
+import { readConfig, writeConfig, launchPatch, validateValues, withoutSecrets } from './cfg.js';
 import { createBackup, deleteBackup, listBackups, restoreBackup } from './backups.js';
 import { audit, listAudit, listSamples } from './db.js';
 import { scanInstall } from './discover.js';
@@ -203,15 +203,21 @@ export function createApi({ secureCookies = false, version = '0.1.0' } = {}) {
   router.get('/servers/:id/config', (req, res) => {
     const server = requireServer(req, res);
     if (!server) return;
-    res.json(readConfig(server));
+    res.json(withoutSecrets(readConfig(server)));
   });
 
   router.put('/servers/:id/config', (req, res) => {
     const server = requireServer(req, res);
     if (!server) return;
-    const result = writeConfig(server, req.body?.values ?? {});
-    audit('config_update', { serverId: server.id, detail: Object.keys(req.body?.values ?? {}).join(','), ip: req.ip });
-    res.json(result);
+    const values = req.body?.values ?? {};
+    validateValues(values);
+    // Chaves passadas como +convar no boot só valem se o cadastro acompanhar,
+    // senão o servidor reiniciaria com o valor antigo da linha de comando.
+    const updated = updateServer(server.id, launchPatch(values));
+    const result = writeConfig(updated ?? server, values);
+    if (updated) runtimeManager.sync(loadConfig().servers);
+    audit('config_update', { serverId: server.id, detail: Object.keys(values).join(','), ip: req.ip });
+    res.json(withoutSecrets(result));
   });
 
   router.get('/servers/:id/backups', (req, res) => {

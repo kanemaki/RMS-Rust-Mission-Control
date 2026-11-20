@@ -143,11 +143,11 @@
 
         @for (group of groups(); track group.name) {
           <fieldset>
-            <legend>{{ group.name }}</legend>
+            <legend>{{ 'cfg.group.' + group.name | t }}</legend>
             <div class="config-grid">
               @for (field of group.fields; track field.key) {
                 <div class="field">
-                  <label [for]="field.key">{{ field.label }}</label>
+                  <label [for]="field.key">{{ 'cfg.field.' + field.key | t }}</label>
                   @if (field.type === 'bool') {
                     <label class="switch">
                       <input

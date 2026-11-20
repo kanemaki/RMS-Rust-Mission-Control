@@ -40,40 +40,107 @@ export function configPath(server) {
   return path.join(server.installDir, 'server', server.identity, 'cfg', 'server.cfg');
 }
 
+// O Rust grava sozinho o serverauto.cfg (server.writecfg e save periódico);
+// o server.cfg só existe se o painel ou o dono do servidor o criar.
+export function autoConfigPath(server) {
+  return path.join(server.installDir, 'server', server.identity, 'cfg', 'serverauto.cfg');
+}
+
+// Chaves que o painel força na linha de comando (+convar) no boot — o argumento
+// sobrescreve os arquivos de cfg, então o cadastro é a fonte real desses valores.
+const RECORD_FIELDS = [
+  ['server.hostname', 'hostname'],
+  ['server.maxplayers', 'maxPlayers'],
+  ['server.seed', 'seed'],
+  ['server.worldsize', 'worldSize'],
+  ['server.saveinterval', 'saveInterval'],
+  ['server.port', 'port'],
+  ['rcon.port', 'rconPort'],
+];
+
+const LAUNCH_FIELDS = [...RECORD_FIELDS, ['rcon.password', 'rconPassword']];
+
+function parseConfigFile(file, collectUnknown) {
+  const values = {};
+  const unknown = [];
+  if (!fs.existsSync(file)) return { values, unknown };
+  for (const line of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('//') || trimmed.startsWith('#')) continue;
+    const match = /^([A-Za-z0-9_.]+)\s+(.*)$/.exec(trimmed);
+    if (!match) {
+      if (collectUnknown) unknown.push(line);
+      continue;
+    }
+    const [, key, rawValue] = match;
+    const value = rawValue.trim().replace(/^"(.*)"$/, '$1');
+    if (SCHEMA_BY_KEY.has(key)) values[key] = coerce(value, SCHEMA_BY_KEY.get(key).type);
+    else if (collectUnknown) unknown.push(line);
+  }
+  return { values, unknown };
+}
+
+function recordValues(server) {
+  const values = {};
+  for (const [key, field] of RECORD_FIELDS) {
+    const raw = server[field];
+    if (raw === undefined || raw === null || raw === '') continue;
+    values[key] = coerce(String(raw), SCHEMA_BY_KEY.get(key).type);
+  }
+  return values;
+}
+
 export function readConfig(server) {
   const file = configPath(server);
   const exists = fs.existsSync(file);
-  const values = {};
-  const unknown = [];
-  if (exists) {
-    const lines = fs.readFileSync(file, 'utf8').split(/\r?\n/);
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed || trimmed.startsWith('//') || trimmed.startsWith('#')) continue;
-      const match = /^([A-Za-z0-9_.]+)\s+(.*)$/.exec(trimmed);
-      if (!match) {
-        unknown.push(line);
-        continue;
-      }
-      const [, key, rawValue] = match;
-      const value = rawValue.trim().replace(/^"(.*)"$/, '$1');
-      if (SCHEMA_BY_KEY.has(key)) values[key] = coerce(value, SCHEMA_BY_KEY.get(key).type);
-      else unknown.push(line);
-    }
-  }
-  return { path: file, exists, values, unknown, schema: CONFIG_SCHEMA };
+  // Mesma ordem de precedência do boot do Rust: serverauto.cfg → server.cfg → argumentos +convar.
+  const auto = parseConfigFile(autoConfigPath(server), false);
+  const user = exists ? parseConfigFile(file, true) : { values: {}, unknown: [] };
+  const values = { ...auto.values, ...user.values, ...recordValues(server) };
+  return { path: file, exists, values, unknown: user.unknown, schema: CONFIG_SCHEMA };
 }
 
-export function writeConfig(server, input) {
-  if (!input || typeof input !== 'object') throw new ValidationError('Valores inválidos.');
-  const current = readConfig(server);
-  const values = { ...current.values };
+// Cópia para resposta da API: a senha RCON nunca volta ao painel pela aba server.cfg
+// (a fonte real é o cadastro; o discover de importação usa readConfig direto de propósito).
+export function withoutSecrets(read) {
+  const values = { ...read.values };
+  for (const field of CONFIG_SCHEMA) {
+    if (field.secret) delete values[field.key];
+  }
+  return { ...read, values };
+}
 
+// Patch para o cadastro a partir dos valores enviados pela aba server.cfg:
+// sem isso, o boot aplicaria o +convar antigo e ignoraria o que foi salvo.
+export function launchPatch(input) {
+  const patch = {};
+  if (!input || typeof input !== 'object') return patch;
+  for (const [key, field] of LAUNCH_FIELDS) {
+    if (!(key in input)) continue;
+    const raw = input[key];
+    if (raw === '' || raw === null || raw === undefined) continue;
+    patch[field] = raw;
+  }
+  return patch;
+}
+
+export function validateValues(input) {
+  if (!input || typeof input !== 'object') throw new ValidationError('Valores inválidos.');
+  const values = {};
   for (const [key, rawValue] of Object.entries(input)) {
     const field = SCHEMA_BY_KEY.get(key);
     if (!field) throw new ValidationError(`Chave desconhecida: ${key}`);
-    values[key] = validateValue(field, rawValue);
+    const value = validateValue(field, rawValue);
+    if (field.secret && value === '') continue;
+    values[key] = value;
   }
+  return values;
+}
+
+export function writeConfig(server, input) {
+  const validated = validateValues(input);
+  const current = readConfig(server);
+  const values = { ...current.values, ...validated };
 
   const lines = ['// Gerado pelo Rust Mission Control', `// ${new Date().toISOString()}`, ''];
   for (const field of CONFIG_SCHEMA) {
@@ -89,7 +156,8 @@ export function writeConfig(server, input) {
   const file = configPath(server);
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, lines.join('\n'), 'utf8');
-  return readConfig(server);
+  // Resposta = estado gravado (values é exatamente o que foi escrito no arquivo).
+  return { path: file, exists: true, values, unknown: current.unknown, schema: CONFIG_SCHEMA };
 }
 
 function validateValue(field, rawValue) {
