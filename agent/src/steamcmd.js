@@ -2,22 +2,50 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { createLineSplitter } from './lines.js';
+import { dataDir } from './paths.js';
+
+const IS_WIN = process.platform === 'win32';
+const STEAMCMD_URL = IS_WIN
+  ? 'https://steamcdn-a.akamaihd.net/client/installer/steamcmd.zip'
+  : 'https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz';
+
+export const sharedSteamCmdDir = path.join(dataDir, 'steamcmd');
+
+export function steamCmdBinary(dir) {
+  return path.join(dir, IS_WIN ? 'steamcmd.exe' : 'steamcmd.sh');
+}
+
+async function downloadSteamCmd(dir, onLine) {
+  onLine?.({ stream: 'stdout', line: `SteamCMD não encontrado. Baixando de ${STEAMCMD_URL}...` });
+  fs.mkdirSync(dir, { recursive: true });
+  const res = await fetch(STEAMCMD_URL);
+  if (!res.ok) throw new Error(`Download do SteamCMD falhou (HTTP ${res.status}).`);
+  const archive = path.join(dir, IS_WIN ? 'steamcmd.zip' : 'steamcmd.tar.gz');
+  fs.writeFileSync(archive, Buffer.from(await res.arrayBuffer()));
+  await new Promise((resolve, reject) => {
+    const tar = spawn('tar', ['-xf', archive, '-C', dir], { windowsHide: true });
+    tar.on('error', reject);
+    tar.on('close', (code) => (code === 0 ? resolve() : reject(new Error(`Falha ao extrair o SteamCMD (tar código ${code}).`))));
+  });
+  fs.rmSync(archive, { force: true });
+  if (!fs.existsSync(steamCmdBinary(dir))) throw new Error('SteamCMD baixado, mas o executável não foi encontrado.');
+}
 
 /**
  * Executa o SteamCMD para instalar/atualizar o Rust Dedicated Server (app 258550).
  * Retorna { ok, code } e transmite a saída linha a linha.
  */
-export function updateServerFiles(server, { onLine, timeoutMs = 45 * 60 * 1000 } = {}) {
+async function updateOnce(server, { onLine, timeoutMs = 45 * 60 * 1000 } = {}) {
+  const steamCmdDir = server.steamCmdDir || sharedSteamCmdDir;
+  const steamCmd = steamCmdBinary(steamCmdDir);
+  if (!fs.existsSync(steamCmd)) {
+    try {
+      await downloadSteamCmd(steamCmdDir, onLine);
+    } catch (error) {
+      return { ok: false, code: null, error: `SteamCMD não encontrado em ${steamCmd} e o download automático falhou: ${error.message}` };
+    }
+  }
   return new Promise((resolve) => {
-    if (!server.steamCmdDir) {
-      resolve({ ok: false, code: null, error: 'Pasta do SteamCMD não configurada para este servidor.' });
-      return;
-    }
-    const steamCmd = path.join(server.steamCmdDir, process.platform === 'win32' ? 'steamcmd.exe' : 'steamcmd.sh');
-    if (!fs.existsSync(steamCmd)) {
-      resolve({ ok: false, code: null, error: `SteamCMD não encontrado em ${steamCmd}` });
-      return;
-    }
     if (!fs.existsSync(server.installDir)) {
       fs.mkdirSync(server.installDir, { recursive: true });
     }
@@ -34,7 +62,7 @@ export function updateServerFiles(server, { onLine, timeoutMs = 45 * 60 * 1000 }
     ];
 
     const child = spawn(steamCmd, args, {
-      cwd: server.steamCmdDir,
+      cwd: steamCmdDir,
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -67,4 +95,18 @@ export function updateServerFiles(server, { onLine, timeoutMs = 45 * 60 * 1000 }
     child.on('error', (error) => finish({ ok: false, code: null, error: error.message }));
     child.on('close', (code) => finish({ ok: code === 0, code }));
   });
+}
+
+/**
+ * O SteamCMD recém-baixado se auto-atualiza na primeira execução e costuma sair
+ * com código 7 ("Update complete, launching..."). Nesse caso basta rodar de novo.
+ */
+export async function updateServerFiles(server, opts = {}) {
+  let result;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    result = await updateOnce(server, opts);
+    if (result.ok || result.code === null) return result;
+    opts.onLine?.({ stream: 'stdout', line: `SteamCMD retornou código ${result.code}. Tentativa ${attempt}/3${attempt < 3 ? ', repetindo...' : '.'}` });
+  }
+  return result;
 }
