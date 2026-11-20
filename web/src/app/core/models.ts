@@ -18,6 +18,7 @@ export interface ServerStatus {
   autoRestart: boolean;
   autoUpdate: boolean;
   nextWipeAt?: number | null;
+  nextBackupAt?: number | null;
   install: { installed: boolean; executable: string; steamCmd: boolean } | null;
 }
 
@@ -29,11 +30,18 @@ export interface WipeSchedule {
   rotateSeed: boolean;
 }
 
+export interface BackupSchedule {
+  enabled: boolean;
+  time: string;
+  keep: number;
+}
+
 export interface DiscordEvents {
   online: boolean;
   offline: boolean;
   crash: boolean;
   wipe: boolean;
+  backup: boolean;
 }
 
 export interface DiscordSettings {
@@ -68,6 +76,7 @@ export interface Server {
   saveInterval: number;
   startedAtOverride: number | null;
   wipeSchedule: WipeSchedule;
+  backupSchedule: BackupSchedule;
   discord: DiscordSettings;
   autoUpdate: boolean;
   autoRestart: boolean;

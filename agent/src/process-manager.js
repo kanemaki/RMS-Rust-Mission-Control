@@ -13,6 +13,7 @@ import { createBackup } from './backups.js';
 import { ConflictError } from './errors.js';
 import { notifyDiscord } from './discord.js';
 import { clearWipeData, nextMonthlyWipeAt } from './wipe-scheduler.js';
+import { nextDailyBackupAt, pruneScheduledBackups } from './backup-scheduler.js';
 import { updateServer } from './store.js';
 
 const READY_RE = /server startup complete|steamServer initialized|server initialized/i;
@@ -47,12 +48,16 @@ export class ServerRuntime {
     this.wipeInProgress = false;
     this.scheduledWipeAt = null;
     this.wipeWarningThreshold = null;
+    this.backupTimer = null;
+    this.backupInProgress = false;
+    this.scheduledBackupAt = null;
     this.readyTimer = null;
     this.playerTimer = null;
     this.logStream = null;
     this.logStreamDay = null;
     this.lastLines = [];
     this.#scheduleWipe();
+    this.#scheduleBackup();
   }
 
   applyConfig(server) {
@@ -67,6 +72,7 @@ export class ServerRuntime {
       this.#log('agent', 'Configuração de RCON mudou; reinicie o servidor para aplicar.');
     }
     this.#scheduleWipe();
+    this.#scheduleBackup();
     logBus.status(this.server.id, this.status());
   }
 
@@ -96,6 +102,7 @@ export class ServerRuntime {
       autoRestart: this.server.autoRestart,
       autoUpdate: this.server.autoUpdate,
       nextWipeAt: this.scheduledWipeAt,
+      nextBackupAt: this.scheduledBackupAt,
       install: this.remote
         ? null
         : {
@@ -225,6 +232,7 @@ export class ServerRuntime {
   dispose() {
     clearTimeout(this.restartTimer);
     clearTimeout(this.wipeTimer);
+    clearTimeout(this.backupTimer);
     clearTimeout(this.readyTimer);
     clearInterval(this.playerTimer);
     this.rcon?.stop();
@@ -564,6 +572,60 @@ export class ServerRuntime {
     } finally {
       this.wipeInProgress = false;
       this.#scheduleWipe();
+      logBus.status(this.server.id, this.status());
+    }
+  }
+
+  #scheduleBackup() {
+    clearTimeout(this.backupTimer);
+    const schedule = this.server.backupSchedule;
+    if (!schedule?.enabled || this.remote) {
+      this.scheduledBackupAt = null;
+      return;
+    }
+    this.scheduledBackupAt = nextDailyBackupAt(schedule);
+    this.#armBackupTimer();
+  }
+
+  #armBackupTimer() {
+    if (!this.scheduledBackupAt || this.backupInProgress) return;
+    const delay = Math.min(Math.max(0, this.scheduledBackupAt - Date.now()), MAX_TIMER_MS);
+    this.backupTimer = setTimeout(() => {
+      if (this.scheduledBackupAt - Date.now() > 1000) {
+        this.#armBackupTimer();
+        return;
+      }
+      void this.#runScheduledBackup();
+    }, delay);
+    this.backupTimer.unref?.();
+  }
+
+  async #runScheduledBackup() {
+    if (this.backupInProgress || !this.server.backupSchedule?.enabled || this.remote) return;
+    this.backupInProgress = true;
+    clearTimeout(this.backupTimer);
+    try {
+      if (this.wipeInProgress || ['starting', 'stopping', 'updating'].includes(this.state)) {
+        this.#log('agent', 'Backup automático adiado: o servidor está em outra operação. Tentará novamente amanhã no mesmo horário.');
+        return;
+      }
+      const schedule = this.server.backupSchedule;
+      this.#log('agent', 'Iniciando backup automático...');
+      const backup = await createBackup(this.server, this, { label: 'scheduled' });
+      const pruned = pruneScheduledBackups(this.server, schedule.keep);
+      const removedNote = pruned.length ? ` ${pruned.length} backup(s) antigo(s) removido(s) pela retenção.` : '';
+      this.#log('agent', `Backup automático concluído: ${backup.name}.${removedNote}`);
+      void this.#notify(
+        'backup',
+        'Backup automático concluído',
+        `Arquivo: ${backup.name}.${removedNote}`,
+      );
+    } catch (error) {
+      this.#log('agent', `Falha no backup automático: ${error.message}`);
+      void this.#notify('backup', 'Falha no backup automático', error.message);
+    } finally {
+      this.backupInProgress = false;
+      this.#scheduleBackup();
       logBus.status(this.server.id, this.status());
     }
   }

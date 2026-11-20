@@ -375,6 +375,30 @@
               }
             }
           </fieldset>
+
+          <fieldset class="wipe-settings">
+            <legend>{{ 'server.backup.title' | t }}</legend>
+            <label class="switch">
+              <input type="checkbox" name="backupEnabled" [(ngModel)]="settings.backupSchedule.enabled" />
+              <span>{{ 'server.backup.enabled' | t }}</span>
+            </label>
+            @if (settings.backupSchedule.enabled) {
+              <div class="config-grid wipe-grid">
+                <div class="field">
+                  <label for="backup-time">{{ 'server.backup.time' | t }}</label>
+                  <input id="backup-time" name="backup-time" type="time" [(ngModel)]="settings.backupSchedule.time" />
+                </div>
+                <div class="field">
+                  <label for="backup-keep">{{ 'server.backup.keep' | t }}</label>
+                  <input id="backup-keep" name="backup-keep" type="number" [(ngModel)]="settings.backupSchedule.keep" min="1" max="52" />
+                </div>
+              </div>
+              <p class="hint">{{ 'server.backup.safety' | t }}</p>
+              @if (s.status?.nextBackupAt) {
+                <p class="hint">{{ 'server.backup.next' | t }} <strong>{{ date(s.status!.nextBackupAt!) }}</strong></p>
+              }
+            }
+          </fieldset>
         }
 
         <fieldset class="wipe-settings">
@@ -411,6 +435,10 @@
               <label class="switch">
                 <input type="checkbox" name="dcWipe" [(ngModel)]="settings.discordEvents.wipe" />
                 <span>{{ 'server.discord.wipe' | t }}</span>
+              </label>
+              <label class="switch">
+                <input type="checkbox" name="dcBackup" [(ngModel)]="settings.discordEvents.backup" />
+                <span>{{ 'server.discord.backup' | t }}</span>
               </label>
             </div>
             <p class="hint">{{ 'server.discord.hint' | t }}</p>

@@ -47,6 +47,7 @@ function defaultServer(detected = detectInstall()) {
     saveInterval: 300,
     startedAtOverride: null,
     wipeSchedule: { enabled: false, dayOfMonth: 1, time: '04:00', type: 'map', rotateSeed: false },
+    backupSchedule: { enabled: false, time: '03:00', keep: 7 },
     discord: defaultDiscord(),
     autoUpdate: true,
     autoRestart: true,
@@ -164,6 +165,7 @@ export function normalizeServer(input, existing = null) {
 
   merged.startedAtOverride = normalizeTimestamp(merged.startedAtOverride);
   merged.wipeSchedule = normalizeWipeSchedule(merged.wipeSchedule, merged.mode);
+  merged.backupSchedule = normalizeBackupSchedule(merged.backupSchedule, merged.mode);
   merged.discord = normalizeDiscord(input.discord, existing?.discord ?? merged.discord);
 
   merged.extraArgs = Array.isArray(merged.extraArgs)
@@ -203,6 +205,21 @@ function normalizeWipeSchedule(value, mode) {
   }
   if (schedule.enabled && mode === 'remote') {
     throw new ValidationError('Wipe agendado está disponível apenas para servidores locais.');
+  }
+  return schedule;
+}
+
+function normalizeBackupSchedule(value, mode) {
+  const defaults = { enabled: false, time: '03:00', keep: 7 };
+  const schedule = { ...defaults, ...(value && typeof value === 'object' ? value : {}) };
+  schedule.enabled = Boolean(schedule.enabled);
+  schedule.time = String(schedule.time ?? '');
+  if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(schedule.time)) {
+    throw new ValidationError('backupSchedule.time deve estar no formato HH:mm.');
+  }
+  schedule.keep = clampInt(schedule.keep, 1, 52, 'backupSchedule.keep');
+  if (schedule.enabled && mode === 'remote') {
+    throw new ValidationError('Backup automático está disponível apenas para servidores locais.');
   }
   return schedule;
 }

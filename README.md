@@ -75,6 +75,7 @@ Dados gerados em `agent/data/`:
 - Console ao vivo (stdout/stderr + RCON + chat) com filtro, autoscroll e comandos
 - Editor de `server.cfg` com schema validado, preservando linhas desconhecidas
 - Backups manuais da identidade, restore com backup de segurança automático
+- Backup automático diário com retenção configurável
 - Wipe mensal agendado de mapa, blueprints ou ambos, com backup completo e opção de seed aleatória
 - Auditoria de ações e sessões persistidas em SQLite
 - PWA instalável, layout responsivo e tema escuro
@@ -88,6 +89,15 @@ O wipe de mapa limpa apenas `server/<identidade>/save/`; o de blueprints remove 
 `player.blueprints*` da identidade. A seed aleatória é opcional e só se aplica a wipes que incluem o mapa.
 Servidores remotos não podem usar essa função. Se o agente estiver desligado na hora marcada, o wipe
 não é executado retroativamente: o próximo agendamento será no mês seguinte.
+
+### Backup automático
+
+O backup automático é opcional e vem desativado. Para servidores locais, roda todos os dias no horário
+local escolhido e cria um `.tar.gz` completo da identidade (identificado com o sufixo `-scheduled`).
+Se o servidor estiver online, o agente pede um `save` via RCON antes de copiar. A retenção mantém apenas
+os N backups automáticos mais recentes (1–52); backups manuais, pré-restauração e do wipe agendado nunca
+são removidos. Se o agente estiver desligado na hora marcada, o backup não é executado retroativamente.
+Há um evento opcional de alerta no Discord para backup concluído ou com falha.
 
 ## API
 

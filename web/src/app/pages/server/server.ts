@@ -5,7 +5,7 @@ import { Subscription } from 'rxjs';
 import { ApiService } from '../../core/api.service';
 import { readError } from '../../core/auth.service';
 import { EventsService } from '../../core/events.service';
-import { Backup, DiscordEvents, ConfigField, LogEntry, Server, ServerConfig, ServerState, WipeSchedule } from '../../core/models';
+import { Backup, BackupSchedule, DiscordEvents, ConfigField, LogEntry, Server, ServerConfig, ServerState, WipeSchedule } from '../../core/models';
 import { I18nService } from '../../core/i18n.service';
 import { TPipe } from '../../shared/t.pipe';
 
@@ -59,9 +59,10 @@ export class ServerPage implements OnInit, OnDestroy {
     autoUpdate: true,
     autoRestart: true,
     wipeSchedule: { enabled: false, dayOfMonth: 1, time: '04:00', type: 'map', rotateSeed: false } as WipeSchedule,
+    backupSchedule: { enabled: false, time: '03:00', keep: 7 } as BackupSchedule,
     discordEnabled: false,
     discordWebhook: '',
-    discordEvents: { online: true, offline: true, crash: true, wipe: true } as DiscordEvents,
+    discordEvents: { online: true, offline: true, crash: true, wipe: true, backup: false } as DiscordEvents,
   };
 
   private id = '';
@@ -121,6 +122,7 @@ export class ServerPage implements OnInit, OnDestroy {
           autoUpdate: server.autoUpdate,
           autoRestart: server.autoRestart,
           wipeSchedule: { ...server.wipeSchedule },
+          backupSchedule: { ...server.backupSchedule },
           discordEnabled: server.discord.enabled,
           discordWebhook: '',
           discordEvents: { ...server.discord.events },
@@ -304,6 +306,10 @@ export class ServerPage implements OnInit, OnDestroy {
       wipeSchedule: {
         ...this.settings.wipeSchedule,
         enabled: this.settings.mode === 'remote' ? false : this.settings.wipeSchedule.enabled,
+      },
+      backupSchedule: {
+        ...this.settings.backupSchedule,
+        enabled: this.settings.mode === 'remote' ? false : this.settings.backupSchedule.enabled,
       },
     };
     payload.discord = {
