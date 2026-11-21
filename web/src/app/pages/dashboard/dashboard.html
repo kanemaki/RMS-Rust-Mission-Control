@@ -7,6 +7,9 @@
     <button class="btn" type="button" (click)="openPanel('groups')">
       {{ panel() === 'groups' ? ('common.cancel' | t) : ('group.title' | t) }}
     </button>
+    <button class="btn" type="button" (click)="openPanel('security')">
+      {{ panel() === 'security' ? ('common.cancel' | t) : ('security.title' | t) }}
+    </button>
     <button class="btn" type="button" (click)="openPanel('import')">
       {{ panel() === 'import' ? ('common.cancel' | t) : ('dash.addExisting' | t) }}
     </button>
@@ -305,6 +308,127 @@
         }
       </ul>
       <p class="hint">{{ 'group.note' | t }}</p>
+    }
+  </div>
+}
+
+@if (panel() === 'security') {
+  <div class="panel create security-panel">
+    <header class="form-head">
+      <h2>{{ 'security.title' | t }}</h2>
+      <p class="muted small">{{ 'security.subtitle' | t }}</p>
+    </header>
+
+    @if (totpError()) {
+      <div class="error-box">{{ totpError() }}</div>
+    }
+
+    @if (totpCodes().length) {
+      <div class="recovery-box">
+        <strong>{{ 'security.recovery.title' | t }}</strong>
+        <p class="muted small">{{ 'security.recovery.hint' | t }}</p>
+        <ul class="recovery-codes">
+          @for (code of totpCodes(); track code) {
+            <li>{{ code }}</li>
+          }
+        </ul>
+      </div>
+    }
+
+    @if (totpSetupData(); as setup) {
+      <div class="totp-setup">
+        <img class="totp-qr" [src]="setup.qr" [attr.alt]="'security.qrAlt' | t" />
+        <div class="totp-steps">
+          <p class="muted small">{{ 'security.setup.hint' | t }}</p>
+          <div class="field">
+            <label for="totpSecret">{{ 'security.setup.secret' | t }}</label>
+            <input id="totpSecret" name="totpSecret" [value]="setup.secret" readonly />
+          </div>
+          <div class="field">
+            <label for="totpCode">{{ 'security.setup.code' | t }}</label>
+            <input
+              id="totpCode"
+              name="totpCode"
+              inputmode="numeric"
+              autocomplete="one-time-code"
+              [(ngModel)]="totpDraft.code"
+            />
+          </div>
+          <div class="head-buttons">
+            <button
+              class="btn primary"
+              type="button"
+              [disabled]="totpBusy() || !totpDraft.code"
+              (click)="enableTotp()"
+            >
+              @if (totpBusy()) {
+                <span class="spinner"></span>
+              }
+              {{ 'security.setup.confirm' | t }}
+            </button>
+            <button class="btn ghost" type="button" (click)="cancelTotpSetup()">
+              {{ 'common.cancel' | t }}
+            </button>
+          </div>
+        </div>
+      </div>
+    } @else if (totp()?.enabled) {
+      <div class="totp-status">
+        <strong class="ok-text">{{ 'security.enabled' | t }}</strong>
+        <span class="muted small">{{ 'security.recoveryLeft' | t }}: {{ totp()?.recoveryCodesLeft }}</span>
+      </div>
+      @if (!totpDisableOpen()) {
+        <button class="btn danger" type="button" (click)="totpDisableOpen.set(true)">
+          {{ 'security.disable' | t }}
+        </button>
+      } @else {
+        <div class="totp-disable">
+          <div class="field">
+            <label for="totpPassword">{{ 'security.disable.password' | t }}</label>
+            <input
+              id="totpPassword"
+              name="totpPassword"
+              type="password"
+              autocomplete="current-password"
+              [(ngModel)]="totpDraft.password"
+            />
+          </div>
+          <div class="field">
+            <label for="totpDisableCode">{{ 'security.disable.code' | t }}</label>
+            <input
+              id="totpDisableCode"
+              name="totpDisableCode"
+              inputmode="numeric"
+              autocomplete="one-time-code"
+              [(ngModel)]="totpDraft.code"
+            />
+          </div>
+          <div class="head-buttons">
+            <button
+              class="btn danger"
+              type="button"
+              [disabled]="totpBusy() || !totpDraft.password || !totpDraft.code"
+              (click)="disableTotp()"
+            >
+              @if (totpBusy()) {
+                <span class="spinner"></span>
+              }
+              {{ 'security.disable.submit' | t }}
+            </button>
+            <button class="btn ghost" type="button" (click)="totpDisableOpen.set(false)">
+              {{ 'common.cancel' | t }}
+            </button>
+          </div>
+        </div>
+      }
+    } @else {
+      <p class="muted">{{ 'security.off' | t }}</p>
+      <button class="btn primary" type="button" [disabled]="totpBusy()" (click)="startTotpSetup()">
+        @if (totpBusy()) {
+          <span class="spinner"></span>
+        }
+        {{ 'security.enable' | t }}
+      </button>
     }
   </div>
 }

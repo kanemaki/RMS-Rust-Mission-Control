@@ -38,18 +38,29 @@ const SAMPLE_RANGES = { '24h': 24, '7d': 24 * 7, '30d': 24 * 30 };
 const MAX_POINTS = 400;
 const BATCH_ACTIONS = ['start', 'stop', 'restart', 'backup'];
 import {
+  beginTotpSetup,
   clearCookie,
+  confirmTotpSetup,
+  createPendingChallenge,
   createSession,
+  destroyPendingChallenge,
   destroySession,
+  disableTotp,
   loginRateLimit,
   needsSetup,
+  readPendingChallenge,
   requireAuth,
   resetLoginAttempts,
+  resetTotpAttempts,
   sessionCookie,
   setPassword,
   tokenFromRequest,
+  totpEnabled,
+  totpRateLimit,
   verifyPassword,
+  verifySecondFactor,
 } from './auth.js';
+import QRCode from 'qrcode';
 
 export function createApi({ secureCookies = false, version = '0.1.0' } = {}) {
   const router = express.Router();
@@ -81,10 +92,36 @@ export function createApi({ secureCookies = false, version = '0.1.0' } = {}) {
       return;
     }
     resetLoginAttempts(req.ip);
+    if (totpEnabled()) {
+      const challenge = createPendingChallenge({ ip: req.ip, userAgent: req.get('user-agent') });
+      audit('login_totp_challenge', { ip: req.ip });
+      res.json({ ok: true, totpRequired: true, challenge: challenge.token, expiresAt: challenge.expiresAt });
+      return;
+    }
     const { token } = createSession({ ip: req.ip, userAgent: req.get('user-agent') });
     res.setHeader('Set-Cookie', sessionCookie(token, { secure: secureCookies }));
     audit('login', { ip: req.ip });
     res.json({ ok: true });
+  });
+
+  router.post('/auth/login/totp', totpRateLimit, (req, res) => {
+    const challenge = String(req.body?.challenge ?? '');
+    if (!readPendingChallenge(challenge)) {
+      res.status(401).json({ error: 'Desafio expirado. Entre novamente com a senha.' });
+      return;
+    }
+    const result = verifySecondFactor(req.body?.code);
+    if (!result.ok) {
+      audit('totp_failed', { ip: req.ip });
+      res.status(401).json({ error: 'Código inválido.' });
+      return;
+    }
+    destroyPendingChallenge(challenge);
+    resetTotpAttempts(req.ip);
+    const { token } = createSession({ ip: req.ip, userAgent: req.get('user-agent') });
+    res.setHeader('Set-Cookie', sessionCookie(token, { secure: secureCookies }));
+    audit(result.recovery ? 'login_recovery_code' : 'login_totp', { ip: req.ip });
+    res.json({ ok: true, recovery: result.recovery });
   });
 
   router.post('/auth/logout', (req, res) => {
@@ -94,10 +131,38 @@ export function createApi({ secureCookies = false, version = '0.1.0' } = {}) {
   });
 
   router.get('/auth/me', requireAuth, (req, res) => {
-    res.json({ authenticated: true, expiresAt: req.session.expiresAt });
+    res.json({ authenticated: true, expiresAt: req.session.expiresAt, totpEnabled: totpEnabled() });
   });
 
   router.use(requireAuth);
+
+  router.get('/auth/totp', (req, res) => {
+    const { totp } = loadConfig().auth;
+    res.json({
+      enabled: Boolean(totp?.enabled),
+      enabledAt: totp?.enabledAt ?? null,
+      recoveryCodesLeft: Array.isArray(totp?.recoveryCodes) ? totp.recoveryCodes.length : 0,
+    });
+  });
+
+  router.post('/auth/totp/setup', async (req, res) => {
+    const { secret, otpauth } = beginTotpSetup({ account: 'painel' });
+    const qr = await QRCode.toDataURL(otpauth, { margin: 1, width: 240 });
+    audit('totp_setup_start', { ip: req.ip });
+    res.json({ secret, otpauth, qr });
+  });
+
+  router.post('/auth/totp/enable', (req, res) => {
+    const { recoveryCodes } = confirmTotpSetup(req.body?.code);
+    audit('totp_enabled', { ip: req.ip });
+    res.json({ ok: true, recoveryCodes });
+  });
+
+  router.post('/auth/totp/disable', (req, res) => {
+    disableTotp({ password: req.body?.password, code: req.body?.code });
+    audit('totp_disabled', { ip: req.ip });
+    res.json({ ok: true });
+  });
 
   const localOnly = (req, res, next) => {
     const server = findServer(req.params.id);

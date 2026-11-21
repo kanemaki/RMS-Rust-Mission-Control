@@ -13,11 +13,13 @@ import {
   InstallScan,
   Server,
   ServerState,
+  TotpSetup,
+  TotpStatus,
 } from '../../core/models';
 import { I18nService } from '../../core/i18n.service';
 import { TPipe } from '../../shared/t.pipe';
 
-type Panel = 'none' | 'create' | 'import' | 'groups';
+type Panel = 'none' | 'create' | 'import' | 'groups' | 'security';
 type ImportKind = 'local' | 'remote';
 type Manage = 'attach' | 'process';
 
@@ -55,6 +57,14 @@ export class DashboardPage implements OnInit, OnDestroy {
   readonly groupBusy = signal(false);
   readonly groupDraft = { name: '' };
   readonly renameDraft = { id: null as string | null, name: '' };
+
+  readonly totp = signal<TotpStatus | null>(null);
+  readonly totpSetupData = signal<TotpSetup | null>(null);
+  readonly totpCodes = signal<string[]>([]);
+  readonly totpBusy = signal(false);
+  readonly totpError = signal<string | null>(null);
+  readonly totpDisableOpen = signal(false);
+  readonly totpDraft = { code: '', password: '' };
 
   readonly selectedCount = computed(() => this.selectedIds().size);
 
@@ -155,7 +165,83 @@ export class DashboardPage implements OnInit, OnDestroy {
 
   openPanel(panel: Panel): void {
     this.error.set(null);
-    this.panel.set(this.panel() === panel ? 'none' : panel);
+    const next = this.panel() === panel ? 'none' : panel;
+    this.panel.set(next);
+    if (next === 'security') this.loadTotp();
+  }
+
+  // ---- Verificação em duas etapas (TOTP) ----
+
+  loadTotp(): void {
+    this.totpError.set(null);
+    this.api.totpStatus().subscribe({
+      next: (status) => this.totp.set(status),
+      error: (err) => this.totpError.set(readError(err, 'Falha ao carregar o 2FA.')),
+    });
+  }
+
+  startTotpSetup(): void {
+    this.totpBusy.set(true);
+    this.totpError.set(null);
+    this.totpCodes.set([]);
+    this.api.totpSetup().subscribe({
+      next: (data) => {
+        this.totpSetupData.set(data);
+        this.totpDraft.code = '';
+        this.totpBusy.set(false);
+      },
+      error: (err) => {
+        this.totpError.set(readError(err, 'Falha ao iniciar a configuração do 2FA.'));
+        this.totpBusy.set(false);
+      },
+    });
+  }
+
+  enableTotp(): void {
+    const code = this.totpDraft.code.trim();
+    if (!code || this.totpBusy()) return;
+    this.totpBusy.set(true);
+    this.totpError.set(null);
+    this.api.totpEnable(code).subscribe({
+      next: ({ recoveryCodes }) => {
+        this.totpCodes.set(recoveryCodes);
+        this.totpSetupData.set(null);
+        this.totpDraft.code = '';
+        this.totpBusy.set(false);
+        this.loadTotp();
+      },
+      error: (err) => {
+        this.totpError.set(readError(err, 'Código inválido.'));
+        this.totpBusy.set(false);
+      },
+    });
+  }
+
+  disableTotp(): void {
+    const { password, code } = this.totpDraft;
+    if (!password || !code || this.totpBusy()) return;
+    this.totpBusy.set(true);
+    this.totpError.set(null);
+    this.api.totpDisable(password, code.trim()).subscribe({
+      next: () => {
+        this.totpDraft.password = '';
+        this.totpDraft.code = '';
+        this.totpDisableOpen.set(false);
+        this.totpCodes.set([]);
+        this.totpBusy.set(false);
+        this.loadTotp();
+      },
+      error: (err) => {
+        this.totpError.set(readError(err, 'Não foi possível desativar o 2FA.'));
+        this.totpBusy.set(false);
+      },
+    });
+  }
+
+  cancelTotpSetup(): void {
+    this.totpSetupData.set(null);
+    this.totpDraft.code = '';
+    this.totpError.set(null);
   }
 
   start(server: Server): void {

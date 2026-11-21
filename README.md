@@ -136,9 +136,14 @@ Mutações exigem o cabeçalho `x-rmc-request: 1` (proteção CSRF).
 GET    /api/health
 GET    /api/setup
 POST   /api/setup                    { password }
-POST   /api/auth/login               { password }
+POST   /api/auth/login               { password } → sessão ou desafio 2FA
+POST   /api/auth/login/totp          { challenge, code } → sessão
 POST   /api/auth/logout
-GET    /api/auth/me
+GET    /api/auth/me                  inclui totpEnabled
+GET    /api/auth/totp                status do 2FA e códigos restantes
+POST   /api/auth/totp/setup          segredo + otpauth + QR (data URL)
+POST   /api/auth/totp/enable         { code } → códigos de recuperação
+POST   /api/auth/totp/disable        { password, code }
 
 GET    /api/servers
 POST   /api/servers
@@ -258,12 +263,45 @@ Variáveis: `RMC_PORT` (padrão 8090), `RMC_HOST` (padrão 127.0.0.1), `RMC_DATA
 - Senha do painel com scrypt + salt; sessões opacas com hash SHA-256 no banco
 - Cookie `HttpOnly`, `SameSite=Lax`, expiração de 30 dias
 - Rate limit de login: 8 tentativas por 15 minutos por IP
+- **2FA (TOTP)** opcional: código de 6 dígitos a cada 30 segundos, tolerância de ±1 passo,
+  10 códigos de recuperação de uso único (guardados com hash) e desafio de login válido por 5 minutos
 - RCON escuta em `127.0.0.1` e a senha nunca é devolvida pela API
 - Processos iniciados com array de argumentos (sem shell), evitando injeção
 - CSP, `X-Frame-Options: DENY`, `nosniff` e `no-referrer`
 - Auditoria de login, comandos RCON, config, backups e ciclo de vida
 
-Limitações conhecidas: sem 2FA ainda; a senha do RCON fica em texto no `config.json`
+### Desativar o 2FA
+
+O 2FA é opcional e pode ser desligado a qualquer momento — não é uma via de mão única.
+
+**Pelo painel (jeito normal):** logado, abra **Segurança** → **Desativar 2FA** e informe a
+**senha do painel** mais um **código do autenticador** (ou um dos códigos de recuperação).
+A rota é `POST /api/auth/totp/disable { password, code }`. Ao desativar, o segredo, o segredo
+pendente e os 10 códigos de recuperação são apagados; se ativar de novo depois, é gerado um
+**segredo novo e 10 códigos novos** (os antigos não voltam). O histórico de auditoria
+(`totp_enabled` / `totp_disabled`) permanece.
+
+**Saída de emergência (perdeu o celular e os códigos de recuperação):** pare o serviço, edite
+`agent/data/config.json` e deixe o bloco `auth.totp` assim, depois suba o serviço de novo:
+
+```json
+"totp": {
+  "enabled": false,
+  "secret": null,
+  "pendingSecret": null,
+  "recoveryCodes": [],
+  "enabledAt": null
+}
+```
+
+Isso é acesso físico ao arquivo — por isso a pasta `agent/data` não deve ir para repositório
+nem para backup público.
+
+> **Por usuário, ainda não.** Hoje o painel tem uma credencial só (um `auth.passwordHash` e um
+> `auth.totp` no `config.json`), então desativar vale para o painel inteiro. O 2FA por usuário,
+> com o Owner podendo resetar o de um membro específico, entra na **Fase 7 (multi-usuário com papéis)**.
+
+Limitações conhecidas: a senha do RCON fica em texto no `config.json`
 (proteja a pasta `agent/data`); o painel não deve ser exposto diretamente na internet sem HTTPS.
 
 ## Docker
@@ -358,13 +396,13 @@ npm test
 ```
 
 Cobre normalização de config, roundtrip do `server.cfg`, scrypt/sessões, cliente RCON contra um
-WebSocket falso, ciclo de vida com servidor simulado, grupos e ações em lote, e um fluxo HTTP completo
+WebSocket falso, ciclo de vida com servidor simulado, grupos e ações em lote, 2FA (TOTP) e um fluxo HTTP completo
 (setup → login → criar → iniciar → logs → parar).
 
 ## Roadmap
 
 - **Fase 2:** ~~alertas no Discord, backup automático, métricas históricas~~ ✔
-- **Fase 3:** ~~plugins Oxide/uMod~~ ✔, ~~multi-servidor avançado (grupos e ações em lote)~~ ✔, 2FA (TOTP), licenciamento
+- **Fase 3:** ~~plugins Oxide/uMod~~ ✔, ~~multi-servidor avançado (grupos e ações em lote)~~ ✔, ~~2FA (TOTP)~~ ✔, licenciamento
 
 > Projeto independente, não afiliado à Facepunch Studios. Não redistribui binários do jogo:
 > apenas automatiza o SteamCMD.

@@ -16,7 +16,16 @@ import {
   Server,
   ServerConfig,
   ServerStatus,
+  TotpSetup,
+  TotpStatus,
 } from './models';
+
+export interface LoginResponse {
+  ok: true;
+  totpRequired?: boolean;
+  challenge?: string;
+  expiresAt?: number;
+}
 
 @Injectable({ providedIn: 'root' })
 export class ApiService {
@@ -30,16 +39,36 @@ export class ApiService {
     return this.http.post<{ ok: true }>('/api/setup', { password });
   }
 
-  login(password: string): Observable<{ ok: true }> {
-    return this.http.post<{ ok: true }>('/api/auth/login', { password });
+  login(password: string): Observable<LoginResponse> {
+    return this.http.post<LoginResponse>('/api/auth/login', { password });
   }
 
   logout(): Observable<{ ok: true }> {
     return this.http.post<{ ok: true }>('/api/auth/logout', {});
   }
 
-  me(): Observable<{ authenticated: true; expiresAt: number }> {
-    return this.http.get<{ authenticated: true; expiresAt: number }>('/api/auth/me');
+  me(): Observable<{ authenticated: true; expiresAt: number; totpEnabled: boolean }> {
+    return this.http.get<{ authenticated: true; expiresAt: number; totpEnabled: boolean }>('/api/auth/me');
+  }
+
+  loginTotp(challenge: string, code: string): Observable<{ ok: true; recovery: boolean }> {
+    return this.http.post<{ ok: true; recovery: boolean }>('/api/auth/login/totp', { challenge, code });
+  }
+
+  totpStatus(): Observable<TotpStatus> {
+    return this.http.get<TotpStatus>('/api/auth/totp');
+  }
+
+  totpSetup(): Observable<TotpSetup> {
+    return this.http.post<TotpSetup>('/api/auth/totp/setup', {});
+  }
+
+  totpEnable(code: string): Observable<{ ok: true; recoveryCodes: string[] }> {
+    return this.http.post<{ ok: true; recoveryCodes: string[] }>('/api/auth/totp/enable', { code });
+  }
+
+  totpDisable(password: string, code: string): Observable<{ ok: true }> {
+    return this.http.post<{ ok: true }>('/api/auth/totp/disable', { password, code });
   }
 
   servers(): Observable<Server[]> {

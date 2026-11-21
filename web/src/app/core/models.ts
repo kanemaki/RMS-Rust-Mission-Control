@@ -212,3 +212,15 @@ export type StreamEvent =
   | { type: 'hello'; servers: ServerStatus[] }
   | { type: 'status'; serverId: string; status: ServerStatus }
   | { type: 'log'; serverId: string; entry: LogEntry };
+
+export interface TotpStatus {
+  enabled: boolean;
+  enabledAt: string | null;
+  recoveryCodesLeft: number;
+}
+
+export interface TotpSetup {
+  secret: string;
+  otpauth: string;
+  qr: string;
+}

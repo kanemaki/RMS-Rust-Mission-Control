@@ -2,7 +2,8 @@ import { Injectable, inject, signal } from '@angular/core';
 import { firstValueFrom } from 'rxjs';
 import { ApiService } from './api.service';
 
-export type AuthState = 'loading' | 'setup' | 'login' | 'ready';
+export type AuthState = 'loading' | 'setup' | 'login' | 'totp' | 'ready';
+export type LoginResult = 'ok' | 'totp' | 'error';
 
 @Injectable({ providedIn: 'root' })
 export class AuthService {
@@ -10,6 +11,8 @@ export class AuthService {
   readonly state = signal<AuthState>('loading');
   readonly error = signal<string | null>(null);
   readonly busy = signal(false);
+  readonly challenge = signal<string | null>(null);
+  readonly recoveryMode = signal(false);
 
   constructor() {
     window.addEventListener('rmc:unauthorized', () => {
@@ -32,19 +35,54 @@ export class AuthService {
     }
   }
 
-  async login(password: string): Promise<boolean> {
+  async login(password: string): Promise<LoginResult> {
     this.busy.set(true);
     this.error.set(null);
     try {
-      await firstValueFrom(this.api.login(password));
+      const res = await firstValueFrom(this.api.login(password));
+      if (res.totpRequired && res.challenge) {
+        this.challenge.set(res.challenge);
+        this.recoveryMode.set(false);
+        this.state.set('totp');
+        return 'totp';
+      }
+      this.state.set('ready');
+      return 'ok';
+    } catch (err: unknown) {
+      this.error.set(readError(err, 'Não foi possível entrar.'));
+      return 'error';
+    } finally {
+      this.busy.set(false);
+    }
+  }
+
+  async loginTotp(code: string): Promise<boolean> {
+    const challenge = this.challenge();
+    if (!challenge) {
+      this.cancelTotp();
+      return false;
+    }
+    this.busy.set(true);
+    this.error.set(null);
+    try {
+      await firstValueFrom(this.api.loginTotp(challenge, code));
+      this.challenge.set(null);
+      this.recoveryMode.set(false);
       this.state.set('ready');
       return true;
     } catch (err: unknown) {
-      this.error.set(readError(err, 'Não foi possível entrar.'));
+      this.error.set(readError(err, 'Código inválido.'));
       return false;
     } finally {
       this.busy.set(false);
     }
+  }
+
+  cancelTotp(): void {
+    this.challenge.set(null);
+    this.recoveryMode.set(false);
+    this.error.set(null);
+    this.state.set('login');
   }
 
   async setup(password: string): Promise<boolean> {
@@ -68,6 +106,8 @@ export class AuthService {
     } catch {
       /* ignora */
     }
+    this.challenge.set(null);
+    this.recoveryMode.set(false);
     this.state.set('login');
   }
 }

@@ -5,7 +5,7 @@
   </div>
 } @else if (auth.state() === 'setup') {
   <app-setup />
-} @else if (auth.state() === 'login') {
+} @else if (auth.state() === 'login' || auth.state() === 'totp') {
   <app-login />
 } @else {
   <div class="shell">

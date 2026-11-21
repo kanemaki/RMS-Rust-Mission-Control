@@ -26,6 +26,13 @@ export function getDb() {
       ip TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit (ts DESC);
+    CREATE TABLE IF NOT EXISTS pending_2fa (
+      token_hash TEXT PRIMARY KEY,
+      created_at INTEGER NOT NULL,
+      expires_at INTEGER NOT NULL,
+      ip TEXT,
+      user_agent TEXT
+    );
     CREATE TABLE IF NOT EXISTS samples (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       server_id TEXT NOT NULL,

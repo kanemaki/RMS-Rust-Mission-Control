@@ -60,7 +60,12 @@ function defaultConfig() {
   const detected = detectInstall();
   return {
     version: 1,
-    auth: { passwordHash: null, salt: null, createdAt: null },
+    auth: {
+      passwordHash: null,
+      salt: null,
+      createdAt: null,
+      totp: { enabled: false, secret: null, pendingSecret: null, recoveryCodes: [], enabledAt: null },
+    },
     groups: [],
     servers: detected ? [defaultServer(detected)] : [],
   };
@@ -107,7 +112,11 @@ function normalizeConfig(raw) {
   const base = defaultConfig();
   const config = {
     version: 1,
-    auth: { ...base.auth, ...(raw.auth ?? {}) },
+    auth: {
+      ...base.auth,
+      ...(raw.auth ?? {}),
+      totp: { ...base.auth.totp, ...(raw.auth?.totp ?? {}) },
+    },
     groups: Array.isArray(raw.groups) ? raw.groups.map((group) => normalizeGroup(group, group)) : base.groups,
     servers: Array.isArray(raw.servers) ? raw.servers : base.servers,
   };
