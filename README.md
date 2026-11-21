@@ -1,5 +1,7 @@
 # Rust Mission Control
 
+🌐 **Português** · [English](README.en.md)
+
 Painel web local para criar, manter e configurar servidores **Rust Dedicated** no Windows.
 Agente em Node.js + interface Angular em PWA (funciona no desktop e no celular).
 
@@ -112,8 +114,9 @@ geram amostras de recursos (os arquivos ficam na máquina de origem).
 
 Para servidores locais, a aba **Plugins (Oxide)** gerencia o Oxide e seus plugins:
 
-- **Instalar/atualizar o Oxide** — baixa a última release (`Oxide-Rust.zip`) do GitHub e extrai sobre a
-  pasta do servidor. Exige o servidor parado e verifica a presença de `Oxide.Core.dll` ao final.
+- **Instalar/atualizar o Oxide** — baixa a última release do GitHub (`Oxide.Rust.zip` no Windows,
+  `Oxide.Rust-linux.zip` no Linux; o nome legado `Oxide-Rust.zip` de releases antigas também é aceito)
+  e extrai sobre a pasta do servidor. Exige o servidor parado e verifica a presença de `Oxide.Core.dll` ao final.
 - **Lista de plugins** — lê os `.cs` em `Oxide/plugins` e mostra título, autor, versão (do cabeçalho
   `[Info(...)]`) e se o plugin está carregado (via `oxide.plugins` quando o servidor está online).
 - **Instalar do uMod** — aceita o nome do plugin ou a URL completa; só `https://umod.org/plugins/Nome.cs`
