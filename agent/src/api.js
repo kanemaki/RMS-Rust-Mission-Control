@@ -1,11 +1,15 @@
 import express from 'express';
 import {
+  addGroup,
   addServer,
   detectInstall,
   findServer,
+  listGroups,
   loadConfig,
   publicServer,
+  removeGroup,
   removeServer,
+  updateGroup,
   updateServer,
   ValidationError,
 } from './store.js';
@@ -32,6 +36,7 @@ import {
 
 const SAMPLE_RANGES = { '24h': 24, '7d': 24 * 7, '30d': 24 * 30 };
 const MAX_POINTS = 400;
+const BATCH_ACTIONS = ['start', 'stop', 'restart', 'backup'];
 import {
   clearCookie,
   createSession,
@@ -114,6 +119,36 @@ export function createApi({ secureCookies = false, version = '0.1.0' } = {}) {
     res.json(scan);
   });
 
+  router.get('/groups', (req, res) => {
+    res.json(listGroups());
+  });
+
+  router.post('/groups', (req, res) => {
+    const group = addGroup(req.body ?? {});
+    audit('group_create', { detail: group.name, ip: req.ip });
+    res.status(201).json(group);
+  });
+
+  router.patch('/groups/:id', (req, res) => {
+    const group = updateGroup(req.params.id, req.body ?? {});
+    if (!group) {
+      res.status(404).json({ error: 'Grupo não encontrado.' });
+      return;
+    }
+    audit('group_update', { detail: group.name, ip: req.ip });
+    res.json(group);
+  });
+
+  router.delete('/groups/:id', (req, res) => {
+    if (!removeGroup(req.params.id)) {
+      res.status(404).json({ error: 'Grupo não encontrado.' });
+      return;
+    }
+    runtimeManager.sync(loadConfig().servers);
+    audit('group_delete', { detail: req.params.id, ip: req.ip });
+    res.json({ ok: true });
+  });
+
   router.get('/servers', (req, res) => {
     const config = loadConfig();
     res.json(
@@ -161,6 +196,62 @@ export function createApi({ secureCookies = false, version = '0.1.0' } = {}) {
     runtimeManager.sync(loadConfig().servers);
     audit('server_delete', { serverId: server.id, ip: req.ip });
     res.json({ ok: true });
+  });
+
+  // Ação em lote sobre vários servidores de uma vez. Cada servidor roda isolado:
+  // o resultado é agregado por item em vez de a primeira falha derrubar o lote.
+  // O lote nunca roda atualização automática — SteamCMD concorrente na mesma
+  // pasta trava; para atualizar, use a ação individual de cada servidor.
+  router.post('/servers/batch', async (req, res) => {
+    const rawIds = req.body?.ids;
+    const action = String(req.body?.action ?? '');
+    if (!Array.isArray(rawIds) || !rawIds.length) {
+      throw new ValidationError('ids deve ser uma lista de servidores.');
+    }
+    const ids = [...new Set(rawIds.map((id) => String(id ?? '').trim()).filter(Boolean))];
+    if (!ids.length) throw new ValidationError('ids deve ser uma lista de servidores.');
+    if (ids.length > 50) throw new ValidationError('O lote aceita no máximo 50 servidores.');
+    if (!BATCH_ACTIONS.includes(action)) {
+      throw new ValidationError('Ação inválida. Use start, stop, restart ou backup.');
+    }
+
+    const config = loadConfig();
+    const targets = ids.map((id) => ({ id, server: config.servers.find((item) => item.id === id) ?? null }));
+    const outcomes = await Promise.allSettled(
+      targets.map(async ({ id, server }) => {
+        if (!server) throw new ValidationError('Servidor não encontrado.');
+        if (action === 'backup') {
+          if (server.mode === 'remote') {
+            throw new ValidationError('Backup disponível apenas para servidores locais.');
+          }
+          const runtime = runtimeManager.get(id);
+          const backup = await createBackup(server, runtime, { label: 'batch' });
+          return { backup, status: runtime?.status() ?? null };
+        }
+        const runtime = runtimeManager.get(id);
+        if (!runtime) throw new ValidationError('Servidor não encontrado.');
+        const options = { skipUpdate: true };
+        const status =
+          action === 'stop'
+            ? await runtime.stop()
+            : action === 'restart'
+              ? await runtime.restart(options)
+              : await runtime.start(options);
+        return { status };
+      }),
+    );
+
+    const results = targets.map(({ id, server }, index) => {
+      const outcome = outcomes[index];
+      const name = server?.name ?? id;
+      if (outcome.status === 'rejected') {
+        return { id, name, ok: false, error: outcome.reason?.message ?? 'Falha ao executar a ação.' };
+      }
+      return { id, name, ok: true, ...outcome.value };
+    });
+    const succeeded = results.filter((item) => item.ok).length;
+    audit('server_batch', { detail: `${action}: ${succeeded}/${results.length}`, ip: req.ip });
+    res.json({ ok: true, action, total: results.length, succeeded, failed: results.length - succeeded, results });
   });
 
   router.post('/servers/:id/start', async (req, res) => {

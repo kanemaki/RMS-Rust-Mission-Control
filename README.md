@@ -144,9 +144,16 @@ GET    /api/servers
 POST   /api/servers
 GET    /api/discover                  pasta padrão sugerida
 POST   /api/discover                 { installDir } → identidades e valores do server.cfg
+
+GET    /api/groups                   grupos com contagem de servidores
+POST   /api/groups                   { name }
+PATCH  /api/groups/:id               { name } (renomear)
+DELETE /api/groups/:id               remove o grupo; servidores ficam sem grupo
+
 GET    /api/servers/:id
 PATCH  /api/servers/:id
 DELETE /api/servers/:id
+POST   /api/servers/batch            { ids, action } ação em lote (start/stop/restart/backup)
 
 POST   /api/servers/:id/start        { skipUpdate? }
 POST   /api/servers/:id/stop
@@ -176,6 +183,10 @@ POST   /api/servers/:id/oxide/plugins/:name/load|unload|reload
 GET    /api/audit?limit=
 GET    /api/events                   SSE (status + logs)
 ```
+
+O lote (`/api/servers/batch`) executa a ação em paralelo e devolve o resultado por servidor
+(`results[].ok`/`error`) — uma falha não derruba as demais. O lote nunca roda a atualização
+automática do SteamCMD; para atualizar, use o `update` individual de cada servidor.
 
 ## Duas formas de cadastrar um servidor
 
@@ -347,13 +358,13 @@ npm test
 ```
 
 Cobre normalização de config, roundtrip do `server.cfg`, scrypt/sessões, cliente RCON contra um
-WebSocket falso, ciclo de vida com servidor simulado e um fluxo HTTP completo
+WebSocket falso, ciclo de vida com servidor simulado, grupos e ações em lote, e um fluxo HTTP completo
 (setup → login → criar → iniciar → logs → parar).
 
 ## Roadmap
 
 - **Fase 2:** ~~alertas no Discord, backup automático, métricas históricas~~ ✔
-- **Fase 3:** ~~plugins Oxide/uMod~~ ✔, multi-servidor avançado, 2FA (TOTP), licenciamento
+- **Fase 3:** ~~plugins Oxide/uMod~~ ✔, ~~multi-servidor avançado (grupos e ações em lote)~~ ✔, 2FA (TOTP), licenciamento
 
 > Projeto independente, não afiliado à Facepunch Studios. Não redistribui binários do jogo:
 > apenas automatiza o SteamCMD.

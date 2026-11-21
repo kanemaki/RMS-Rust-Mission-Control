@@ -4,6 +4,9 @@ import { Observable } from 'rxjs';
 import {
   AuditEntry,
   Backup,
+  BatchAction,
+  BatchResponse,
+  Group,
   InstallScan,
   LogEntry,
   OxidePlugin,
@@ -41,6 +44,26 @@ export class ApiService {
 
   servers(): Observable<Server[]> {
     return this.http.get<Server[]>('/api/servers');
+  }
+
+  groups(): Observable<Group[]> {
+    return this.http.get<Group[]>('/api/groups');
+  }
+
+  createGroup(name: string): Observable<Group> {
+    return this.http.post<Group>('/api/groups', { name });
+  }
+
+  renameGroup(id: string, name: string): Observable<Group> {
+    return this.http.patch<Group>(`/api/groups/${id}`, { name });
+  }
+
+  deleteGroup(id: string): Observable<{ ok: true }> {
+    return this.http.delete<{ ok: true }>(`/api/groups/${id}`);
+  }
+
+  batch(ids: string[], action: BatchAction): Observable<BatchResponse> {
+    return this.http.post<BatchResponse>('/api/servers/batch', { ids, action });
   }
 
   defaultInstallDir(): Observable<{ defaultInstallDir: string }> {

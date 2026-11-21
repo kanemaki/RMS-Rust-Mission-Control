@@ -32,6 +32,7 @@ function defaultServer(detected = detectInstall()) {
     identity: 'my_server',
     mode: 'local',
     host: '127.0.0.1',
+    group: null,
     installDir: detected?.installDir ?? '',
     steamCmdDir: detected?.steamCmdDir ?? '',
     executable: 'RustDedicated.exe',
@@ -60,6 +61,7 @@ function defaultConfig() {
   return {
     version: 1,
     auth: { passwordHash: null, salt: null, createdAt: null },
+    groups: [],
     servers: detected ? [defaultServer(detected)] : [],
   };
 }
@@ -106,6 +108,7 @@ function normalizeConfig(raw) {
   const config = {
     version: 1,
     auth: { ...base.auth, ...(raw.auth ?? {}) },
+    groups: Array.isArray(raw.groups) ? raw.groups.map((group) => normalizeGroup(group, group)) : base.groups,
     servers: Array.isArray(raw.servers) ? raw.servers : base.servers,
   };
   config.servers = config.servers.map((server) => normalizeServer(server));
@@ -133,6 +136,13 @@ export function normalizeServer(input, existing = null) {
   merged.host = String(merged.host || '127.0.0.1').trim();
   if (!/^[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$/.test(merged.host)) {
     throw new ValidationError('host deve ser um nome de máquina ou IP válido (sem esquema, porta ou barras).');
+  }
+
+  merged.group = merged.group === '' ? null : merged.group ?? null;
+  if (merged.group !== null) {
+    if (typeof merged.group !== 'string' || !/^[A-Za-z0-9-]{1,64}$/.test(merged.group)) {
+      throw new ValidationError('group deve ser o id de um grupo existente.');
+    }
   }
 
   merged.name = String(merged.name || merged.hostname || merged.identity).trim().slice(0, 80);
@@ -254,6 +264,22 @@ function resolveOptionalPath(value) {
   return raw ? path.resolve(raw) : '';
 }
 
+function normalizeGroup(input, existing = null) {
+  const base = existing ?? { id: '', name: '' };
+  const group = {
+    id: String(base.id ?? ''),
+    name: String(input?.name ?? base.name ?? '').trim().slice(0, 64),
+  };
+  if (!group.name) throw new ValidationError('Informe o nome do grupo.');
+  return group;
+}
+
+function assertGroupExists(config, groupId) {
+  if (groupId && !config.groups.some((group) => group.id === groupId)) {
+    throw new ValidationError('Grupo não encontrado.');
+  }
+}
+
 function clampInt(value, min, max, field) {
   const num = Number.parseInt(value, 10);
   if (!Number.isFinite(num) || num < min || num > max) {
@@ -274,6 +300,7 @@ export function addServer(input) {
   if (config.servers.some((item) => item.id === server.id)) {
     throw new ValidationError(`Já existe um servidor com o id "${server.id}".`);
   }
+  assertGroupExists(config, server.group);
   config.servers.push(server);
   saveConfig(config);
   return server;
@@ -285,6 +312,7 @@ export function updateServer(id, patch) {
   if (index === -1) return null;
   const current = config.servers[index];
   const next = normalizeServer({ ...patch, id: current.id, identity: patch.identity ?? current.identity }, current);
+  assertGroupExists(config, next.group);
   config.servers[index] = next;
   saveConfig(config);
   return next;
@@ -295,6 +323,58 @@ export function removeServer(id) {
   const index = config.servers.findIndex((server) => server.id === id);
   if (index === -1) return false;
   config.servers.splice(index, 1);
+  saveConfig(config);
+  return true;
+}
+
+export function listGroups() {
+  const config = loadConfig();
+  return config.groups.map((group) => ({
+    ...group,
+    count: config.servers.filter((server) => server.group === group.id).length,
+  }));
+}
+
+export function findGroup(id) {
+  return loadConfig().groups.find((group) => group.id === id) ?? null;
+}
+
+export function addGroup(input) {
+  const config = loadConfig();
+  const group = normalizeGroup(input);
+  if (config.groups.some((item) => item.name.toLowerCase() === group.name.toLowerCase())) {
+    throw new ValidationError(`Já existe um grupo chamado "${group.name}".`);
+  }
+  group.id = crypto.randomUUID();
+  config.groups.push(group);
+  saveConfig(config);
+  return { ...group, count: 0 };
+}
+
+export function updateGroup(id, input) {
+  const config = loadConfig();
+  const index = config.groups.findIndex((group) => group.id === id);
+  if (index === -1) return null;
+  const next = normalizeGroup({ name: input?.name }, config.groups[index]);
+  if (config.groups.some((item) => item.id !== id && item.name.toLowerCase() === next.name.toLowerCase())) {
+    throw new ValidationError(`Já existe um grupo chamado "${next.name}".`);
+  }
+  config.groups[index] = next;
+  saveConfig(config);
+  return {
+    ...next,
+    count: config.servers.filter((server) => server.group === next.id).length,
+  };
+}
+
+export function removeGroup(id) {
+  const config = loadConfig();
+  const index = config.groups.findIndex((group) => group.id === id);
+  if (index === -1) return false;
+  config.groups.splice(index, 1);
+  for (const server of config.servers) {
+    if (server.group === id) server.group = null;
+  }
   saveConfig(config);
   return true;
 }

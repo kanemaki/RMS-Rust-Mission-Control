@@ -4,6 +4,9 @@
     <p class="muted">{{ 'dash.subtitle' | t }}</p>
   </div>
   <div class="head-buttons">
+    <button class="btn" type="button" (click)="openPanel('groups')">
+      {{ panel() === 'groups' ? ('common.cancel' | t) : ('group.title' | t) }}
+    </button>
     <button class="btn" type="button" (click)="openPanel('import')">
       {{ panel() === 'import' ? ('common.cancel' | t) : ('dash.addExisting' | t) }}
     </button>
@@ -96,6 +99,16 @@
           min="1"
           max="1000"
         />
+      </div>
+      <div class="field">
+        <label for="createGroup">{{ 'create.group' | t }}</label>
+        <select id="createGroup" name="createGroup" [(ngModel)]="createDraft.group">
+          <option value="">{{ 'group.none' | t }}</option>
+          @for (group of groups(); track group.id) {
+            <option [value]="group.id">{{ group.name }}</option>
+          }
+        </select>
+        <span class="hint">{{ 'create.groupHint' | t }}</span>
       </div>
     </div>
     <div class="actions">
@@ -237,71 +250,241 @@
   </form>
 }
 
+@if (panel() === 'groups') {
+  <div class="panel create groups-panel">
+    <header class="form-head">
+      <h2>{{ 'group.title' | t }}</h2>
+      <p class="muted small">{{ 'group.subtitle' | t }}</p>
+    </header>
+
+    <div class="scan-row">
+      <div class="field">
+        <label for="groupName">{{ 'group.nameLabel' | t }}</label>
+        <input
+          id="groupName"
+          name="groupName"
+          [(ngModel)]="groupDraft.name"
+          [placeholder]="'group.namePlaceholder' | t"
+        />
+      </div>
+      <button
+        class="btn primary"
+        type="button"
+        [disabled]="groupBusy() || !groupDraft.name.trim()"
+        (click)="createGroup()"
+      >
+        @if (groupBusy()) {
+          <span class="spinner"></span>
+        }
+        {{ 'group.create' | t }}
+      </button>
+    </div>
+
+    @if (!groups().length) {
+      <p class="muted">{{ 'group.empty' | t }}</p>
+    } @else {
+      <ul class="group-list">
+        @for (group of groups(); track group.id) {
+          <li>
+            @if (renameDraft.id === group.id) {
+              <input class="group-rename" name="renameName" [(ngModel)]="renameDraft.name" />
+              <button class="btn sm primary" type="button" [disabled]="groupBusy()" (click)="renameGroup()">
+                {{ 'common.save' | t }}
+              </button>
+              <button class="btn sm" type="button" (click)="cancelRename()">{{ 'common.cancel' | t }}</button>
+            } @else {
+              <span class="group-name">{{ group.name }}</span>
+              <span class="muted small">{{ groupCount(group.id) }}</span>
+              <span class="group-spacer"></span>
+              <button class="btn sm" type="button" (click)="startRename(group)">{{ 'group.rename' | t }}</button>
+              <button class="btn sm danger" type="button" (click)="deleteGroup(group)">
+                {{ 'common.delete' | t }}
+              </button>
+            }
+          </li>
+        }
+      </ul>
+      <p class="hint">{{ 'group.note' | t }}</p>
+    }
+  </div>
+}
+
 @if (loading()) {
   <div class="empty">{{ 'dash.loading' | t }}</div>
 } @else if (!servers().length) {
   <div class="empty">{{ 'dash.empty' | t }}</div>
 } @else {
-  <div class="cards">
-    @for (server of servers(); track server.id) {
-      <article class="panel card">
-        <header class="card-head">
-          <div class="card-title">
-            <h2>{{ server.name }}</h2>
-            <span class="mono muted">{{ server.identity }}</span>
-          </div>
-          <span [class]="pillClass(server.status?.state)">{{ stateLabel(server.status?.state) }}</span>
-        </header>
-
-        <dl class="stats">
-          <div>
-            <dt>{{ 'common.players' | t }}</dt>
-            <dd>{{ server.status?.players ?? 0 }} / {{ server.status?.maxPlayers ?? server.maxPlayers }}</dd>
-          </div>
-          <div>
-            <dt>{{ uptimeLabel(server) }}</dt>
-            <dd [title]="uptimeHint(server)">{{ uptime(server.status?.uptimeMs) }}</dd>
-          </div>
-          <div>
-            <dt>{{ 'common.port' | t }}</dt>
-            <dd class="mono">{{ server.port }}</dd>
-          </div>
-          <div>
-            <dt>RCON</dt>
-            <dd>{{ (server.status?.rconConnected ? 'common.connected' : 'common.offline') | t }}</dd>
-          </div>
-        </dl>
-
-        @if (server.status?.playerNames?.length) {
-          <p class="players-line" [title]="playersTooltip(server)">
-            {{ 'common.online' | t }}: {{ playersSummary(server) }}
-          </p>
-        }
-        @if (server.status?.install && !server.status?.install?.installed) {
-          <p class="warn-line">{{ 'dash.notInstalled' | t }}</p>
-        }
-        @if (server.status?.lastError) {
-          <p class="error-line">{{ server.status?.lastError }}</p>
-        }
-
-        <footer class="card-actions">
-          <a class="btn sm" [routerLink]="['/servers', server.id]">{{ 'dash.open' | t }}</a>
-          @if (server.status?.state === 'running' || server.status?.state === 'starting') {
-            <button class="btn sm danger" type="button" [disabled]="busyId() === server.id" (click)="stop(server)">
-              {{ (server.mode === 'remote' ? 'dash.disconnect' : 'dash.stop') | t }}
-            </button>
-            @if (server.mode !== 'remote') {
-              <button class="btn sm" type="button" [disabled]="busyId() === server.id" (click)="restart(server)">
-                {{ 'dash.restart' | t }}
-              </button>
-            }
-          } @else {
-            <button class="btn sm primary" type="button" [disabled]="busyId() === server.id" (click)="start(server)">
-              {{ (server.mode === 'remote' ? 'dash.connect' : 'dash.start') | t }}
-            </button>
-          }
-        </footer>
-      </article>
+  <div class="chips">
+    <button type="button" class="chip" [class.active]="groupFilter() === 'all'" (click)="groupFilter.set('all')">
+      {{ 'group.all' | t }} · {{ servers().length }}
+    </button>
+    @for (group of groups(); track group.id) {
+      <button
+        type="button"
+        class="chip"
+        [class.active]="groupFilter() === group.id"
+        (click)="groupFilter.set(group.id)"
+      >
+        {{ group.name }} · {{ groupCount(group.id) }}
+      </button>
+    }
+    @if (ungroupedCount() > 0) {
+      <button
+        type="button"
+        class="chip"
+        [class.active]="groupFilter() === 'ungrouped'"
+        (click)="groupFilter.set('ungrouped')"
+      >
+        {{ 'group.ungrouped' | t }} · {{ ungroupedCount() }}
+      </button>
     }
   </div>
+
+  @if (selectedCount() > 0) {
+    <div class="panel batch-bar">
+      <strong>{{ 'batch.selected' | t }} · {{ selectedCount() }}</strong>
+      <div class="batch-actions">
+        <button class="btn sm primary" type="button" [disabled]="batchBusy()" (click)="runBatch('start')">
+          {{ 'batch.start' | t }}
+        </button>
+        <button class="btn sm danger" type="button" [disabled]="batchBusy()" (click)="runBatch('stop')">
+          {{ 'batch.stop' | t }}
+        </button>
+        <button class="btn sm" type="button" [disabled]="batchBusy()" (click)="runBatch('restart')">
+          {{ 'batch.restart' | t }}
+        </button>
+        <button class="btn sm" type="button" [disabled]="batchBusy()" (click)="runBatch('backup')">
+          {{ 'batch.backup' | t }}
+        </button>
+        <button class="btn sm ghost" type="button" [disabled]="batchBusy()" (click)="clearSelection()">
+          {{ 'batch.clear' | t }}
+        </button>
+      </div>
+      @if (batchBusy()) {
+        <span class="muted small batch-status"><span class="spinner"></span> {{ 'batch.running' | t }}</span>
+      }
+    </div>
+  }
+
+  @if (batchResult(); as result) {
+    <div class="panel batch-result" [class.has-failures]="result.failed > 0">
+      <strong [class.ok-text]="result.failed === 0">{{ batchSummary() }}</strong>
+      @if (result.failed > 0) {
+        <ul class="batch-failures">
+          @for (item of batchFailures(); track item.id) {
+            <li>{{ item.name }}: {{ item.error }}</li>
+          }
+        </ul>
+      }
+    </div>
+  }
+
+  @for (section of sections(); track section.groupId ?? 'ungrouped') {
+    <section class="group-section">
+      <header class="group-head">
+        <input
+          type="checkbox"
+          [checked]="sectionAllSelected(section)"
+          (change)="toggleSection(section)"
+          [attr.aria-label]="sectionLabel(section)"
+        />
+        <h2>{{ sectionLabel(section) }}</h2>
+        <span class="muted small">{{ section.servers.length }}</span>
+      </header>
+      @if (!section.servers.length) {
+        <p class="muted">{{ 'group.emptySection' | t }}</p>
+      } @else {
+        <div class="cards">
+          @for (server of section.servers; track server.id) {
+            <article class="panel card">
+              <header class="card-head">
+                <input
+                  type="checkbox"
+                  class="card-check"
+                  [checked]="isSelected(server.id)"
+                  (change)="toggleSelect(server.id)"
+                  [attr.aria-label]="server.name"
+                />
+                <div class="card-title">
+                  <h2>{{ server.name }}</h2>
+                  <span class="mono muted">{{ server.identity }}</span>
+                </div>
+                <span [class]="pillClass(server.status?.state)">{{ stateLabel(server.status?.state) }}</span>
+              </header>
+
+              <dl class="stats">
+                <div>
+                  <dt>{{ 'common.players' | t }}</dt>
+                  <dd>{{ server.status?.players ?? 0 }} / {{ server.status?.maxPlayers ?? server.maxPlayers }}</dd>
+                </div>
+                <div>
+                  <dt>{{ uptimeLabel(server) }}</dt>
+                  <dd [title]="uptimeHint(server)">{{ uptime(server.status?.uptimeMs) }}</dd>
+                </div>
+                <div>
+                  <dt>{{ 'common.port' | t }}</dt>
+                  <dd class="mono">{{ server.port }}</dd>
+                </div>
+                <div>
+                  <dt>RCON</dt>
+                  <dd>{{ (server.status?.rconConnected ? 'common.connected' : 'common.offline') | t }}</dd>
+                </div>
+              </dl>
+
+              @if (server.status?.playerNames?.length) {
+                <p class="players-line" [title]="playersTooltip(server)">
+                  {{ 'common.online' | t }}: {{ playersSummary(server) }}
+                </p>
+              }
+              @if (server.status?.install && !server.status?.install?.installed) {
+                <p class="warn-line">{{ 'dash.notInstalled' | t }}</p>
+              }
+              @if (server.status?.lastError) {
+                <p class="error-line">{{ server.status?.lastError }}</p>
+              }
+
+              <footer class="card-actions">
+                <select
+                  class="group-select"
+                  (change)="assignGroup(server, $event)"
+                  [disabled]="busyId() === server.id"
+                  [attr.aria-label]="'group.assign' | t"
+                >
+                  <option value="" [selected]="!server.group">{{ 'group.none' | t }}</option>
+                  @for (group of groups(); track group.id) {
+                    <option [value]="group.id" [selected]="server.group === group.id">{{ group.name }}</option>
+                  }
+                </select>
+                <a class="btn sm" [routerLink]="['/servers', server.id]">{{ 'dash.open' | t }}</a>
+                @if (server.status?.state === 'running' || server.status?.state === 'starting') {
+                  <button
+                    class="btn sm danger"
+                    type="button"
+                    [disabled]="busyId() === server.id"
+                    (click)="stop(server)"
+                  >
+                    {{ (server.mode === 'remote' ? 'dash.disconnect' : 'dash.stop') | t }}
+                  </button>
+                  @if (server.mode !== 'remote') {
+                    <button class="btn sm" type="button" [disabled]="busyId() === server.id" (click)="restart(server)">
+                      {{ 'dash.restart' | t }}
+                    </button>
+                  }
+                } @else {
+                  <button
+                    class="btn sm primary"
+                    type="button"
+                    [disabled]="busyId() === server.id"
+                    (click)="start(server)"
+                  >
+                    {{ (server.mode === 'remote' ? 'dash.connect' : 'dash.start') | t }}
+                  </button>
+                }
+              </footer>
+            </article>
+          }
+        </div>
+      }
+    </section>
+  }
 }

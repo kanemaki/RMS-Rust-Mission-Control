@@ -1,17 +1,32 @@
-import { Component, OnDestroy, OnInit, inject, signal } from '@angular/core';
+import { Component, OnDestroy, OnInit, computed, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { RouterLink } from '@angular/router';
-import { Subscription } from 'rxjs';
+import { Subscription, forkJoin } from 'rxjs';
 import { ApiService } from '../../core/api.service';
 import { readError } from '../../core/auth.service';
 import { EventsService } from '../../core/events.service';
-import { DiscoveredIdentity, InstallScan, Server, ServerState } from '../../core/models';
+import {
+  BatchAction,
+  BatchResponse,
+  DiscoveredIdentity,
+  Group,
+  InstallScan,
+  Server,
+  ServerState,
+} from '../../core/models';
 import { I18nService } from '../../core/i18n.service';
 import { TPipe } from '../../shared/t.pipe';
 
-type Panel = 'none' | 'create' | 'import';
+type Panel = 'none' | 'create' | 'import' | 'groups';
 type ImportKind = 'local' | 'remote';
 type Manage = 'attach' | 'process';
+
+/** Seção de servidores exibida no dashboard: um grupo ou o bloco "Sem grupo". */
+export interface ServerSection {
+  groupId: string | null;
+  name: string;
+  servers: Server[];
+}
 
 @Component({
   selector: 'app-dashboard',
@@ -32,6 +47,47 @@ export class DashboardPage implements OnInit, OnDestroy {
   readonly panel = signal<Panel>('none');
   readonly creating = signal(false);
 
+  readonly groups = signal<Group[]>([]);
+  readonly groupFilter = signal('all');
+  readonly selectedIds = signal<Set<string>>(new Set());
+  readonly batchBusy = signal(false);
+  readonly batchResult = signal<BatchResponse | null>(null);
+  readonly groupBusy = signal(false);
+  readonly groupDraft = { name: '' };
+  readonly renameDraft = { id: null as string | null, name: '' };
+
+  readonly selectedCount = computed(() => this.selectedIds().size);
+
+  readonly ungroupedCount = computed(() => {
+    const known = new Set(this.groups().map((group) => group.id));
+    return this.servers().filter((server) => !server.group || !known.has(server.group)).length;
+  });
+
+  /** Lista de seções renderizadas, já filtrada pelo chip ativo. */
+  readonly sections = computed<ServerSection[]>(() => {
+    const servers = this.servers();
+    const known = new Set(this.groups().map((group) => group.id));
+    const inGroup = (groupId: string | null) => (server: Server) =>
+      groupId === null
+        ? !server.group || !known.has(server.group)
+        : server.group === groupId;
+
+    const filter = this.groupFilter();
+    if (filter === 'ungrouped') {
+      return [{ groupId: null, name: '', servers: servers.filter(inGroup(null)) }];
+    }
+    if (filter !== 'all') {
+      const group = this.groups().find((item) => item.id === filter);
+      return [{ groupId: filter, name: group?.name ?? '', servers: servers.filter(inGroup(filter)) }];
+    }
+    const sections: ServerSection[] = this.groups()
+      .map((group) => ({ groupId: group.id, name: group.name, servers: servers.filter(inGroup(group.id)) }))
+      .filter((section) => section.servers.length > 0);
+    const ungrouped = servers.filter(inGroup(null));
+    if (ungrouped.length) sections.push({ groupId: null, name: '', servers: ungrouped });
+    return sections;
+  });
+
   readonly createDraft = {
     name: '',
     identity: '',
@@ -42,6 +98,7 @@ export class DashboardPage implements OnInit, OnDestroy {
     seed: 4365201,
     worldSize: 3000,
     maxPlayers: 50,
+    group: '',
   };
 
   readonly importKind = signal<ImportKind>('local');
@@ -82,9 +139,11 @@ export class DashboardPage implements OnInit, OnDestroy {
 
   load(): void {
     this.loading.set(true);
-    this.api.servers().subscribe({
-      next: (servers) => {
+    forkJoin({ servers: this.api.servers(), groups: this.api.groups() }).subscribe({
+      next: ({ servers, groups }) => {
         this.servers.set(servers);
+        this.groups.set(groups);
+        this.pruneSelection(servers);
         this.loading.set(false);
       },
       error: (err) => {
@@ -111,24 +170,201 @@ export class DashboardPage implements OnInit, OnDestroy {
     this.run(server, this.api.restart(server.id));
   }
 
+  // ---- Seleção múltipla e ações em lote ----
+
+  isSelected(id: string): boolean {
+    return this.selectedIds().has(id);
+  }
+
+  toggleSelect(id: string): void {
+    this.selectedIds.update((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  sectionAllSelected(section: ServerSection): boolean {
+    return section.servers.length > 0 && section.servers.every((server) => this.selectedIds().has(server.id));
+  }
+
+  toggleSection(section: ServerSection): void {
+    this.selectedIds.update((current) => {
+      const next = new Set(current);
+      const all = section.servers.every((server) => next.has(server.id));
+      for (const server of section.servers) {
+        if (all) next.delete(server.id);
+        else next.add(server.id);
+      }
+      return next;
+    });
+  }
+
+  clearSelection(): void {
+    this.selectedIds.set(new Set());
+    this.batchResult.set(null);
+  }
+
+  private pruneSelection(servers: Server[]): void {
+    const ids = new Set(servers.map((server) => server.id));
+    this.selectedIds.update((current) => new Set([...current].filter((id) => ids.has(id))));
+  }
+
+  runBatch(action: BatchAction): void {
+    const ids = [...this.selectedIds()];
+    if (this.batchBusy() || !ids.length) return;
+    this.batchBusy.set(true);
+    this.error.set(null);
+    this.batchResult.set(null);
+    this.api.batch(ids, action).subscribe({
+      next: (response) => {
+        this.batchBusy.set(false);
+        this.batchResult.set(response);
+        this.servers.update((list) =>
+          list.map((server) => {
+            const result = response.results.find((item) => item.id === server.id);
+            return result?.status ? { ...server, status: result.status } : server;
+          }),
+        );
+      },
+      error: (err) => {
+        this.batchBusy.set(false);
+        this.error.set(readError(err, 'A ação em lote falhou.'));
+      },
+    });
+  }
+
+  batchSummary(): string {
+    const result = this.batchResult();
+    if (!result) return '';
+    return this.i18n.t('batch.result', { succeeded: result.succeeded, total: result.total });
+  }
+
+  batchFailures() {
+    return (this.batchResult()?.results ?? []).filter((item) => !item.ok);
+  }
+
+  // ---- Grupos ----
+
+  groupCount(id: string): number {
+    return this.servers().filter((server) => server.group === id).length;
+  }
+
+  sectionLabel(section: ServerSection): string {
+    return section.groupId === null ? this.i18n.t('group.ungrouped') : section.name;
+  }
+
+  createGroup(): void {
+    const name = this.groupDraft.name.trim();
+    if (!name || this.groupBusy()) return;
+    this.groupBusy.set(true);
+    this.error.set(null);
+    this.api.createGroup(name).subscribe({
+      next: (group) => {
+        this.groups.update((groups) => [...groups, group]);
+        this.groupDraft.name = '';
+        this.groupBusy.set(false);
+      },
+      error: (err) => {
+        this.error.set(readError(err, 'Falha ao criar grupo.'));
+        this.groupBusy.set(false);
+      },
+    });
+  }
+
+  startRename(group: Group): void {
+    this.renameDraft.id = group.id;
+    this.renameDraft.name = group.name;
+  }
+
+  cancelRename(): void {
+    this.renameDraft.id = null;
+    this.renameDraft.name = '';
+  }
+
+  renameGroup(): void {
+    const id = this.renameDraft.id;
+    if (!id) return;
+    const name = this.renameDraft.name.trim();
+    if (!name || this.groupBusy()) return;
+    this.groupBusy.set(true);
+    this.api.renameGroup(id, name).subscribe({
+      next: (group) => {
+        this.groups.update((groups) => groups.map((item) => (item.id === group.id ? group : item)));
+        this.cancelRename();
+        this.groupBusy.set(false);
+      },
+      error: (err) => {
+        this.error.set(readError(err, 'Falha ao renomear grupo.'));
+        this.groupBusy.set(false);
+      },
+    });
+  }
+
+  deleteGroup(group: Group): void {
+    if (!confirm(this.i18n.t('group.deleteConfirm', { name: group.name }))) return;
+    this.api.deleteGroup(group.id).subscribe({
+      next: () => {
+        this.groups.update((groups) => groups.filter((item) => item.id !== group.id));
+        if (this.groupFilter() === group.id) this.groupFilter.set('all');
+      },
+      error: (err) => this.error.set(readError(err, 'Falha ao excluir grupo.')),
+    });
+  }
+
+  assignGroup(server: Server, event: Event): void {
+    const group = (event.target as HTMLSelectElement).value || null;
+    if ((server.group ?? null) === group) return;
+    this.busyId.set(server.id);
+    this.error.set(null);
+    this.api.updateServer(server.id, { group }).subscribe({
+      next: (updated) => {
+        this.servers.update((list) =>
+          list.map((item) => (item.id === server.id ? { ...item, group: updated.group } : item)),
+        );
+        this.refreshGroupCounts();
+        this.busyId.set(null);
+      },
+      error: (err) => {
+        this.error.set(readError(err, 'Falha ao alterar o grupo.'));
+        this.busyId.set(null);
+      },
+    });
+  }
+
+  private refreshGroupCounts(): void {
+    const servers = this.servers();
+    this.groups.update((groups) =>
+      groups.map((group) => ({
+        ...group,
+        count: servers.filter((server) => server.group === group.id).length,
+      })),
+    );
+  }
+
   create(): void {
     if (this.creating()) return;
     this.creating.set(true);
     this.error.set(null);
-    this.api.createServer({ ...this.createDraft, mode: 'local' }).subscribe({
-      next: (server) => {
-        this.servers.update((list) => [...list, server]);
-        this.panel.set('none');
-        this.creating.set(false);
-        this.createDraft.name = '';
-        this.createDraft.identity = '';
-        this.createDraft.rconPassword = '';
-      },
-      error: (err) => {
-        this.error.set(readError(err, 'Falha ao criar servidor.'));
-        this.creating.set(false);
-      },
-    });
+    this.api
+      .createServer({ ...this.createDraft, mode: 'local', group: this.createDraft.group || null })
+      .subscribe({
+        next: (server) => {
+          this.servers.update((list) => [...list, server]);
+          this.refreshGroupCounts();
+          this.panel.set('none');
+          this.creating.set(false);
+          this.createDraft.name = '';
+          this.createDraft.identity = '';
+          this.createDraft.rconPassword = '';
+          this.createDraft.group = '';
+        },
+        error: (err) => {
+          this.error.set(readError(err, 'Falha ao criar servidor.'));
+          this.creating.set(false);
+        },
+      });
   }
 
   scanInstall(): void {
@@ -183,6 +419,7 @@ export class DashboardPage implements OnInit, OnDestroy {
     this.api.createServer(payload).subscribe({
       next: (server) => {
         this.servers.update((list) => [...list, server]);
+        this.refreshGroupCounts();
         this.panel.set('none');
         this.creating.set(false);
         this.scan.set(null);

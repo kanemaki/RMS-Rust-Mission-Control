@@ -147,9 +147,16 @@ GET    /api/servers
 POST   /api/servers
 GET    /api/discover                  suggested default folder
 POST   /api/discover                 { installDir } → identities and server.cfg values
+
+GET    /api/groups                   groups with server counts
+POST   /api/groups                   { name }
+PATCH  /api/groups/:id               { name } (rename)
+DELETE /api/groups/:id               removes the group; servers stay ungrouped
+
 GET    /api/servers/:id
 PATCH  /api/servers/:id
 DELETE /api/servers/:id
+POST   /api/servers/batch            { ids, action } batch action (start/stop/restart/backup)
 
 POST   /api/servers/:id/start        { skipUpdate? }
 POST   /api/servers/:id/stop
@@ -179,6 +186,10 @@ POST   /api/servers/:id/oxide/plugins/:name/load|unload|reload
 GET    /api/audit?limit=
 GET    /api/events                   SSE (status + logs)
 ```
+
+The batch endpoint (`/api/servers/batch`) runs the action in parallel and returns a per-server result
+(`results[].ok`/`error`) — one failure does not abort the others. The batch never runs the automatic
+SteamCMD update; to update, use each server's individual `update`.
 
 ## Two ways to register a server
 
@@ -351,13 +362,13 @@ npm test
 ```
 
 Covers config normalization, `server.cfg` roundtrip, scrypt/sessions, the RCON client against a fake
-WebSocket, the process lifecycle with a simulated server, and a full HTTP flow
+WebSocket, the process lifecycle with a simulated server, groups and batch actions, and a full HTTP flow
 (setup → login → create → start → logs → stop).
 
 ## Roadmap
 
 - **Phase 2:** ~~Discord alerts, automatic backup, historical metrics~~ ✔
-- **Phase 3:** ~~Oxide/uMod plugins~~ ✔, advanced multi-server, 2FA (TOTP), licensing
+- **Phase 3:** ~~Oxide/uMod plugins~~ ✔, ~~advanced multi-server (groups and batch actions)~~ ✔, 2FA (TOTP), licensing
 
 > Independent project, not affiliated with Facepunch Studios. Does not redistribute game binaries:
 > it only automates SteamCMD.

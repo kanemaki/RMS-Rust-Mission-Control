@@ -59,6 +59,7 @@ export interface Server {
   identity: string;
   mode: 'local' | 'remote';
   host: string;
+  group: string | null;
   installDir: string;
   steamCmdDir: string;
   executable: string;
@@ -179,6 +180,32 @@ export interface InstallScan {
   executable: string | null;
   installed: boolean;
   identities: DiscoveredIdentity[];
+}
+
+export interface Group {
+  id: string;
+  name: string;
+  count: number;
+}
+
+export type BatchAction = 'start' | 'stop' | 'restart' | 'backup';
+
+export interface BatchResultItem {
+  id: string;
+  name: string;
+  ok: boolean;
+  error?: string;
+  status?: ServerStatus | null;
+  backup?: Backup;
+}
+
+export interface BatchResponse {
+  ok: true;
+  action: BatchAction;
+  total: number;
+  succeeded: number;
+  failed: number;
+  results: BatchResultItem[];
 }
 
 export type StreamEvent =

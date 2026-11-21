@@ -230,6 +230,163 @@
   margin-top: auto;
 }
 
+/* ---- Grupos e ações em lote ---- */
+
+.chips {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+
+.chip {
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.chip:hover {
+  color: var(--text);
+  border-color: #33465a;
+}
+
+.chip.active {
+  color: var(--text);
+  border-color: rgba(255, 107, 53, 0.6);
+  background: rgba(255, 107, 53, 0.1);
+}
+
+.batch-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 14px 16px;
+  margin-bottom: 14px;
+}
+
+.batch-bar strong {
+  font-size: 14px;
+}
+
+.batch-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.batch-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.batch-result {
+  padding: 12px 16px;
+  margin-bottom: 14px;
+  font-size: 13.5px;
+}
+
+.batch-result strong {
+  font-weight: 650;
+}
+
+.batch-result .ok-text {
+  color: var(--ok);
+}
+
+.batch-result.has-failures {
+  border-color: rgba(255, 92, 114, 0.35);
+}
+
+.batch-failures {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  color: var(--danger-text);
+  font-size: 12.5px;
+}
+
+.group-section {
+  margin-bottom: 22px;
+}
+
+.group-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.group-head h2 {
+  font-size: 15px;
+  margin: 0;
+}
+
+.group-head input[type='checkbox'],
+.card-check {
+  width: 16px;
+  height: 16px;
+  accent-color: #ff6b35;
+  flex-shrink: 0;
+}
+
+.groups-panel .group-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.groups-panel .group-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 9px 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+}
+
+.group-name {
+  font-weight: 650;
+}
+
+.group-spacer {
+  flex: 1;
+}
+
+.group-rename {
+  flex: 1;
+  min-width: 160px;
+  max-width: 280px;
+}
+
+.groups-panel .hint {
+  display: block;
+}
+
+.group-select {
+  max-width: 150px;
+  margin-right: auto;
+  padding: 7px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--input-bg);
+  color: var(--text);
+  font-size: 13px;
+}
+
+.group-select:focus {
+  outline: none;
+  border-color: rgba(255, 107, 53, 0.6);
+}
+
 @media (max-width: 720px) {
   .page-head {
     flex-direction: column;
@@ -246,5 +403,19 @@
 
   .card {
     min-width: 0;
+  }
+
+  .batch-bar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .batch-actions .btn {
+    flex: 1;
+  }
+
+  .group-select {
+    max-width: none;
+    flex: 1;
   }
 }
