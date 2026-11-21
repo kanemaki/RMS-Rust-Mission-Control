@@ -1,0 +1,27 @@
+# Rust Mission Control — painel em Docker (modo remoto/RCON).
+# Primeira vez:   docker compose up -d --build
+# Atualizar após novas funcionalidades:  docker compose up -d --build
+# Ver logs:       docker compose logs -f
+# Parar:          docker compose down   (os dados ficam no volume rms-data)
+
+services:
+  rms:
+    build: .
+    image: rms-rust-mission-control:latest
+    container_name: rms
+    ports:
+      - "8090:8090"
+    environment:
+      # O painel já escuta em 0.0.0.0 dentro do container.
+      # Descomente para ativar cookies seguros se colocar atrás de proxy HTTPS:
+      # RMC_SECURE_COOKIES: "1"
+      #
+      # O agendador de backups/wipe usa o fuso do container (padrão: UTC).
+      # Descomente e ajuste se quiser horário local:
+      # TZ: "America/Sao_Paulo"
+    volumes:
+      - rms-data:/data
+    restart: unless-stopped
+
+volumes:
+  rms-data:

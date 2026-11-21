@@ -1,0 +1,20 @@
+# Contexto de build enxuto: a imagem compila o próprio frontend,
+# então o agent/public local (podendo estar desatualizado) fica de fora.
+.git
+.abacusai
+**/node_modules
+agent/data
+agent/.*-data
+agent/public
+agent/test
+agent/seed-metrics.cjs
+agent/e2e-oxide.cjs
+web/dist
+web/.angular
+*.log
+*.tsbuildinfo
+.env
+.env.*
+!.env.example
+Thumbs.db
+.DS_Store

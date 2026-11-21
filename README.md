@@ -252,6 +252,46 @@ Variáveis: `RMC_PORT` (padrão 8090), `RMC_HOST` (padrão 127.0.0.1), `RMC_DATA
 Limitações conhecidas: sem 2FA ainda; a senha do RCON fica em texto no `config.json`
 (proteja a pasta `agent/data`); o painel não deve ser exposto diretamente na internet sem HTTPS.
 
+## Docker
+
+A imagem empacota o painel completo (agente Node.js + interface Angular já compilada).
+É o jeito planejado de **entregar o produto**: quem usa não instala Node, apenas roda
+`docker compose up -d`.
+
+```bash
+docker compose up -d --build   # primeira vez e também para atualizar a imagem
+```
+
+Abra `http://localhost:8090` (ou `http://IP-DA-MAQUINA:8090` de outro aparelho) e defina a senha
+no primeiro acesso — o `config.json`, o banco SQLite, os logs e a sessão ficam no volume
+`rms-data`, então **reconstruir ou atualizar a imagem preserva tudo**.
+
+Comandos do dia a dia:
+
+```bash
+docker compose logs -f         # ver o log do agente
+docker compose restart         # reiniciar o painel
+docker compose down            # parar (dados permanecem no volume)
+docker compose up -d --build   # reconstruir depois de baixar código novo
+```
+
+**O que funciona dentro do container:** tudo do painel para servidores em modo **remoto** —
+console RCON, comandos, contagem de jogadores, cadastro e a interface completa (desktop e celular).
+
+**O que NÃO funciona dentro do container:** servidores em modo **local**. Iniciar o
+`RustDedicated.exe`, instalar Oxide/plugins, backups, métricas de CPU/RAM e atualização via
+SteamCMD exigem que o agente rode como processo nativo na máquina Windows do servidor do jogo —
+um container Linux não inicia processos no hospedeiro. Para esse uso, rode o agente nativo
+(`npm start`) ou instale-o como serviço do Windows; a imagem Docker serve o painel em modo
+remoto (RCON) — útil em VPS/NAS e para entregar a ferramenta.
+
+Sem `docker compose`, com `docker` puro:
+
+```bash
+docker build -t rms-rust-mission-control .
+docker run -d --name rms -p 8090:8090 -v rms-data:/data --restart unless-stopped rms-rust-mission-control
+```
+
 ## Notas de build
 
 O `angular.json` usa `optimization.styles.inlineCritical: false`. O Angular injeta um script inline
