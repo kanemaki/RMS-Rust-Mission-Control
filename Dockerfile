@@ -19,6 +19,7 @@ ENV NODE_ENV=production
 WORKDIR /app
 
 COPY agent/package*.json ./
+COPY agent/patches ./patches
 RUN npm ci --omit=dev
 
 COPY agent/src ./src

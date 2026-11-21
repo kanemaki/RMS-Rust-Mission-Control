@@ -282,8 +282,8 @@ console RCON, comandos, contagem de jogadores, cadastro e a interface completa (
 `RustDedicated.exe`, instalar Oxide/plugins, backups, métricas de CPU/RAM e atualização via
 SteamCMD exigem que o agente rode como processo nativo na máquina Windows do servidor do jogo —
 um container Linux não inicia processos no hospedeiro. Para esse uso, rode o agente nativo
-(`npm start`) ou instale-o como serviço do Windows; a imagem Docker serve o painel em modo
-remoto (RCON) — útil em VPS/NAS e para entregar a ferramenta.
+(`npm start`), instale-o como serviço do Windows (seção anterior) ou os dois; a imagem Docker
+serve o painel em modo remoto (RCON) — útil em VPS/NAS e para entregar a ferramenta.
 
 Sem `docker compose`, com `docker` puro:
 
@@ -291,6 +291,44 @@ Sem `docker compose`, com `docker` puro:
 docker build -t rms-rust-mission-control .
 docker run -d --name rms -p 8090:8090 -v rms-data:/data --restart unless-stopped rms-rust-mission-control
 ```
+
+## Serviço do Windows (agente)
+
+Para o uso local (servidores com Oxide/plugins na própria máquina), o agente não precisa de
+`npm start` a cada boot: ele pode ser registrado como **serviço do Windows** — sobe sozinho
+quando o PC liga, não abre janela e volta sozinho se o agente cair.
+
+Em um **PowerShell como Administrador**, dentro de `agent/`:
+
+```powershell
+npm install                       # instala as dependências (inclui node-windows)
+node service\install-service.cjs  # registra o serviço e já inicia
+```
+
+Comandos do dia a dia:
+
+```powershell
+Get-Service RMSAgent              # ver o estado do serviço
+Start-Service RMSAgent            # iniciar
+Stop-Service RMSAgent             # parar (veja o aviso abaixo)
+node service\uninstall-service.cjs  # remover o serviço (em PowerShell admin)
+```
+
+O log de boot/queda do agente fica em `agent\data\logs\RMSAgent*.log`; os logs de console e
+RCON dos servidores continuam em `agent\data\logs\<servidor>\`.
+
+**Aviso: parar o serviço derruba à força os servidores do jogo.** O Windows encerra a árvore
+de processos sem o encerramento gracioso por RCON — perde-se o progresso desde o último save
+automático. **Pare os servidores pelo painel antes** de parar ou reiniciar o serviço. O
+serviço mantém o *painel* no ar; os servidores do jogo continuam sendo iniciados e parados
+por você no painel, como sempre.
+
+**Como funciona por dentro:** o pacote `node-windows` grava um wrapper (WinSW) em
+`agent\daemon` e o registra como serviço `RMSAgent`. O wrapper vigia o agente
+(`node index.js`, que carrega `src/index.js`) e o reinicia com espera crescente se ele cair
+(até 10 tentativas em 60 s). O patch `agent\patches\node-windows-fix.cjs` (roda no
+`postinstall`) corrige dois defeitos do `node-windows` 1.0.0-beta.8: um `console.log` de
+debug e o sufixo `.exe` no nome do serviço.
 
 ## Notas de build
 

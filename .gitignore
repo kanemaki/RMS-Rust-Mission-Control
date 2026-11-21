@@ -13,6 +13,9 @@ agent/public/
 web/dist/
 web/.angular/
 
+# Arquivos do wrapper do serviço do Windows (gerados por agent/service)
+agent/daemon/
+
 # Ferramentas locais do ambiente (config e capturas temporárias)
 .abacusai/
 
