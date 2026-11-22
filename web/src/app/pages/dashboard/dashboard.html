@@ -2,6 +2,11 @@
   <div>
     <h1>{{ 'dash.title' | t }}</h1>
     <p class="muted">{{ 'dash.subtitle' | t }}</p>
+    @if (license(); as lic) {
+      @if (lic.state !== 'valid') {
+        <span class="license-chip" [class.warn]="lic.readOnly">{{ licenseBadge() }}</span>
+      }
+    }
   </div>
   <div class="head-buttons">
     <button class="btn" type="button" (click)="openPanel('groups')">
@@ -9,6 +14,9 @@
     </button>
     <button class="btn" type="button" (click)="openPanel('security')">
       {{ panel() === 'security' ? ('common.cancel' | t) : ('security.title' | t) }}
+    </button>
+    <button class="btn" type="button" (click)="openPanel('license')">
+      {{ panel() === 'license' ? ('common.cancel' | t) : ('license.title' | t) }}
     </button>
     <button class="btn" type="button" (click)="openPanel('import')">
       {{ panel() === 'import' ? ('common.cancel' | t) : ('dash.addExisting' | t) }}
@@ -429,6 +437,93 @@
         }
         {{ 'security.enable' | t }}
       </button>
+    }
+  </div>
+}
+
+@if (panel() === 'license') {
+  <div class="panel create license-panel">
+    <header class="form-head">
+      <h2>{{ 'license.title' | t }}</h2>
+      <p class="muted small">{{ 'license.subtitle' | t }}</p>
+    </header>
+
+    @if (licenseError()) {
+      <div class="error-box">{{ licenseError() }}</div>
+    }
+
+    @if (license(); as lic) {
+      <div class="license-status" [class.warn]="lic.readOnly">
+        <strong>{{ licenseStateLabel(lic.state) }}</strong>
+        @if (lic.state === 'trial') {
+          <span class="muted small">{{ licenseTrialLeft(lic) }}</span>
+        }
+        @if (lic.error) {
+          <span class="muted small">{{ lic.error }}</span>
+        }
+      </div>
+
+      @if (lic.licensed) {
+        <dl class="license-grid">
+          <div>
+            <dt>{{ 'license.licensee' | t }}</dt>
+            <dd>{{ lic.licensee }}</dd>
+          </div>
+          <div>
+            <dt>{{ 'license.id' | t }}</dt>
+            <dd>{{ lic.licenseId }}</dd>
+          </div>
+          <div>
+            <dt>{{ 'license.plan' | t }}</dt>
+            <dd>{{ lic.plan }}</dd>
+          </div>
+          <div>
+            <dt>{{ 'license.expires' | t }}</dt>
+            <dd>{{ licenseExpiry(lic) }}</dd>
+          </div>
+          <div>
+            <dt>{{ 'license.servers' | t }}</dt>
+            <dd>{{ licenseServers(lic) }}</dd>
+          </div>
+        </dl>
+      }
+
+      @if (lic.readOnly) {
+        <p class="hint warn-text">{{ 'license.readOnly' | t }}</p>
+      }
+
+      <div class="field">
+        <label for="licenseText">{{ 'license.paste' | t }}</label>
+        <textarea
+          id="licenseText"
+          name="licenseText"
+          rows="8"
+          spellcheck="false"
+          [(ngModel)]="licenseDraft.text"
+          [placeholder]="'license.pasteHint' | t"
+        ></textarea>
+      </div>
+
+      <div class="head-buttons">
+        <button
+          class="btn primary"
+          type="button"
+          [disabled]="licenseBusy() || !licenseDraft.text.trim()"
+          (click)="applyLicense()"
+        >
+          @if (licenseBusy()) {
+            <span class="spinner"></span>
+          }
+          {{ 'license.apply' | t }}
+        </button>
+        @if (lic.licensed) {
+          <button class="btn danger" type="button" [disabled]="licenseBusy()" (click)="removeLicense()">
+            {{ 'license.remove' | t }}
+          </button>
+        }
+      </div>
+
+      <p class="hint">{{ 'license.hint' | t }}</p>
     }
   </div>
 }

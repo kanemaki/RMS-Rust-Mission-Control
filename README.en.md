@@ -148,6 +148,10 @@ POST   /api/auth/totp/setup          secret + otpauth + QR (data URL)
 POST   /api/auth/totp/enable         { code } → recovery codes
 POST   /api/auth/totp/disable        { password, code }
 
+GET    /api/license                  license state (trial, valid, expired, invalid)
+POST   /api/license                  { text } applies the signed JSON
+DELETE /api/license                  removes the applied license
+
 GET    /api/servers
 POST   /api/servers
 GET    /api/discover                  suggested default folder
@@ -308,6 +312,53 @@ Known limitations: the RCON password is stored in plain text in `config.json`
 (protect the `agent/data` folder); the dashboard should not be exposed directly to the internet
 without HTTPS.
 
+## License (offline, signed)
+
+The dashboard runs a **14-day trial** with every feature unlocked. After that, without a license it
+switches to **read-only mode**: servers keep running, console, backups and restore keep working;
+creating, editing and deleting servers, groups and plugins is blocked.
+
+The license is a JSON file signed with Ed25519 and verified inside the agent with the public key
+embedded in `agent/src/license.js`. **No network call is made** — there is no license server,
+phone-home or online revocation. The file lives in `agent/data/license.json` and can also be pasted
+into the dashboard under **License**.
+
+```json
+{
+  "payload": {
+    "v": 1,
+    "keyId": "rms-2026",
+    "licenseId": "RMS-7F3K-2Q9M",
+    "licensee": "Customer name",
+    "plan": "pro",
+    "maxServers": 10,
+    "issuedAt": "2026-11-22T00:00:00.000Z",
+    "expiresAt": "2027-11-22T00:00:00.000Z",
+    "installId": null
+  },
+  "signature": "<base64url>"
+}
+```
+
+- `expiresAt: null` = perpetual; `maxServers: null` = unlimited servers
+- `installId` stays `null` (license not bound to a machine); the field exists to enable binding later
+- States: `valid`, `trial`, `expired`, `invalid` and `none` (the latter when `RMC_TRIAL_DAYS=0`)
+
+**Issuing (product owner only):**
+
+```bash
+node tools/license-keygen.cjs                 # once; writes the private key outside the repository
+node tools/license-issue.cjs --licensee "Jane" --plan pro --servers 10 --days 365
+```
+
+`license-keygen` writes the private key to `%USERPROFILE%\.rms-license\private-key.pem` (or the
+`--out`/`RMS_LICENSE_KEY` path) and prints the public key to paste into `EMBEDDED_PUBLIC_KEY`.
+`license-issue` prints the JSON to the terminal or writes it with `--out`. Without the private key
+no license can be issued — keep it outside the repository and back it up.
+
+Routes: `GET /api/license`, `POST /api/license { text }`, `DELETE /api/license`. Applying, rejecting
+and removing are audited (`license_applied`, `license_rejected`, `license_removed`).
+
 ## Docker
 
 The image packages the full dashboard (Node.js agent + already-built Angular interface).
@@ -399,13 +450,14 @@ npm test
 ```
 
 Covers config normalization, `server.cfg` roundtrip, scrypt/sessions, the RCON client against a fake
-WebSocket, the process lifecycle with a simulated server, groups and batch actions, 2FA (TOTP) and a full HTTP flow
+WebSocket, the process lifecycle with a simulated server, groups and batch actions, 2FA (TOTP),
+licensing (Ed25519 signature, trial, server limit and read-only mode) and a full HTTP flow
 (setup → login → create → start → logs → stop).
 
 ## Roadmap
 
 - **Phase 2:** ~~Discord alerts, automatic backup, historical metrics~~ ✔
-- **Phase 3:** ~~Oxide/uMod plugins~~ ✔, ~~advanced multi-server (groups and batch actions)~~ ✔, ~~2FA (TOTP)~~ ✔, licensing
+- **Phase 3:** ~~Oxide/uMod plugins~~ ✔, ~~advanced multi-server (groups and batch actions)~~ ✔, ~~2FA (TOTP)~~ ✔, ~~licensing~~ ✔
 
 > Independent project, not affiliated with Facepunch Studios. Does not redistribute game binaries:
 > it only automates SteamCMD.

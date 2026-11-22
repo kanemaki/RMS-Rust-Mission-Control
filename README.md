@@ -145,6 +145,10 @@ POST   /api/auth/totp/setup          segredo + otpauth + QR (data URL)
 POST   /api/auth/totp/enable         { code } → códigos de recuperação
 POST   /api/auth/totp/disable        { password, code }
 
+GET    /api/license                  estado da licença (trial, valid, expired, invalid)
+POST   /api/license                  { text } aplica o JSON assinado
+DELETE /api/license                  remove a licença aplicada
+
 GET    /api/servers
 POST   /api/servers
 GET    /api/discover                  pasta padrão sugerida
@@ -304,6 +308,53 @@ nem para backup público.
 Limitações conhecidas: a senha do RCON fica em texto no `config.json`
 (proteja a pasta `agent/data`); o painel não deve ser exposto diretamente na internet sem HTTPS.
 
+## Licença (offline, assinada)
+
+O painel funciona em **período de teste de 14 dias** com todos os recursos liberados. Depois disso,
+sem licença, entra em **modo somente leitura**: servidores continuam rodando, console, backups e
+restore funcionam; criar, editar e excluir servidores, grupos e plugins fica bloqueado.
+
+A licença é um arquivo JSON assinado com Ed25519 e verificado no próprio agente com a chave pública
+embutida em `agent/src/license.js`. **Nenhuma chamada de rede é feita** — não existe servidor de
+licenças, phone-home nem revogação online. O arquivo fica em `agent/data/license.json` e também pode
+ser colado no painel em **Licença**.
+
+```json
+{
+  "payload": {
+    "v": 1,
+    "keyId": "rms-2026",
+    "licenseId": "RMS-7F3K-2Q9M",
+    "licensee": "Nome do cliente",
+    "plan": "pro",
+    "maxServers": 10,
+    "issuedAt": "2026-11-22T00:00:00.000Z",
+    "expiresAt": "2027-11-22T00:00:00.000Z",
+    "installId": null
+  },
+  "signature": "<base64url>"
+}
+```
+
+- `expiresAt: null` = perpétua; `maxServers: null` = servidores ilimitados
+- `installId` fica `null` (licença sem vínculo com máquina); o campo existe para ligar o vínculo no futuro
+- Estados: `valid`, `trial`, `expired`, `invalid` e `none` (este último quando `RMC_TRIAL_DAYS=0`)
+
+**Emitir (só o dono do produto):**
+
+```bash
+node tools/license-keygen.cjs                 # uma vez; grava a chave privada fora do repositório
+node tools/license-issue.cjs --licensee "Fulano" --plan pro --servers 10 --days 365
+```
+
+O `license-keygen` grava a chave privada em `%USERPROFILE%\.rms-license\private-key.pem` (ou no
+caminho de `--out`/`RMS_LICENSE_KEY`) e imprime a chave pública para colar em `EMBEDDED_PUBLIC_KEY`.
+O `license-issue` imprime o JSON no terminal ou grava com `--out`. Sem a chave privada não é possível
+emitir licenças — guarde-a fora do repositório e faça backup.
+
+Rotas: `GET /api/license`, `POST /api/license { text }`, `DELETE /api/license`. Aplicar, rejeitar e
+remover geram auditoria (`license_applied`, `license_rejected`, `license_removed`).
+
 ## Docker
 
 A imagem empacota o painel completo (agente Node.js + interface Angular já compilada).
@@ -396,13 +447,14 @@ npm test
 ```
 
 Cobre normalização de config, roundtrip do `server.cfg`, scrypt/sessões, cliente RCON contra um
-WebSocket falso, ciclo de vida com servidor simulado, grupos e ações em lote, 2FA (TOTP) e um fluxo HTTP completo
+WebSocket falso, ciclo de vida com servidor simulado, grupos e ações em lote, 2FA (TOTP),
+licenciamento (assinatura Ed25519, trial, limite de servidores e modo somente leitura) e um fluxo HTTP completo
 (setup → login → criar → iniciar → logs → parar).
 
 ## Roadmap
 
 - **Fase 2:** ~~alertas no Discord, backup automático, métricas históricas~~ ✔
-- **Fase 3:** ~~plugins Oxide/uMod~~ ✔, ~~multi-servidor avançado (grupos e ações em lote)~~ ✔, ~~2FA (TOTP)~~ ✔, licenciamento
+- **Fase 3:** ~~plugins Oxide/uMod~~ ✔, ~~multi-servidor avançado (grupos e ações em lote)~~ ✔, ~~2FA (TOTP)~~ ✔, ~~licenciamento~~ ✔
 
 > Projeto independente, não afiliado à Facepunch Studios. Não redistribui binários do jogo:
 > apenas automatiza o SteamCMD.

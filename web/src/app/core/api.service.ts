@@ -8,6 +8,7 @@ import {
   BatchResponse,
   Group,
   InstallScan,
+  LicenseStatus,
   LogEntry,
   OxidePlugin,
   OxidePluginConfig,
@@ -69,6 +70,18 @@ export class ApiService {
 
   totpDisable(password: string, code: string): Observable<{ ok: true }> {
     return this.http.post<{ ok: true }>('/api/auth/totp/disable', { password, code });
+  }
+
+  licenseStatus(): Observable<LicenseStatus> {
+    return this.http.get<LicenseStatus>('/api/license');
+  }
+
+  applyLicense(text: string): Observable<LicenseStatus> {
+    return this.http.post<LicenseStatus>('/api/license', { text });
+  }
+
+  removeLicense(): Observable<{ ok: true; removed: boolean; license: LicenseStatus }> {
+    return this.http.delete<{ ok: true; removed: boolean; license: LicenseStatus }>('/api/license');
   }
 
   servers(): Observable<Server[]> {

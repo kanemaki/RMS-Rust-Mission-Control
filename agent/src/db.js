@@ -43,6 +43,10 @@ export function getDb() {
       mem INTEGER
     );
     CREATE INDEX IF NOT EXISTS idx_samples_server_ts ON samples (server_id, ts DESC);
+    CREATE TABLE IF NOT EXISTS license_meta (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
   `);
   migrateSamples(db);
   return db;
@@ -140,4 +144,15 @@ export function pruneSamples(olderThanMs = 30 * 24 * 60 * 60 * 1000) {
   } catch (err) {
     console.error('[samples] falha ao limpar amostras:', err.message);
   }
+}
+
+export function getMeta(key) {
+  const row = getDb().prepare('SELECT value FROM license_meta WHERE key = ?').get(String(key));
+  return row?.value ?? null;
+}
+
+export function setMeta(key, value) {
+  getDb()
+    .prepare('INSERT INTO license_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
+    .run(String(key), String(value));
 }

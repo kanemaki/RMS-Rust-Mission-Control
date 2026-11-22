@@ -224,3 +224,29 @@ export interface TotpSetup {
   otpauth: string;
   qr: string;
 }
+
+export type LicenseState = 'valid' | 'trial' | 'expired' | 'invalid' | 'none';
+
+export interface LicenseTrial {
+  days: number;
+  startedAt: number | null;
+  endsAt: number | null;
+  daysLeft: number;
+  active: boolean;
+}
+
+export interface LicenseStatus {
+  checkedAt: number;
+  licensed: boolean;
+  readOnly: boolean;
+  state: LicenseState;
+  licensee: string | null;
+  licenseId: string | null;
+  plan: string | null;
+  maxServers: number | null;
+  issuedAt: string | null;
+  expiresAt: string | null;
+  daysLeft: number | null;
+  error: string | null;
+  trial: LicenseTrial;
+}

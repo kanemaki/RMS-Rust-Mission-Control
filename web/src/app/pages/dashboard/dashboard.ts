@@ -11,6 +11,7 @@ import {
   DiscoveredIdentity,
   Group,
   InstallScan,
+  LicenseStatus,
   Server,
   ServerState,
   TotpSetup,
@@ -19,7 +20,7 @@ import {
 import { I18nService } from '../../core/i18n.service';
 import { TPipe } from '../../shared/t.pipe';
 
-type Panel = 'none' | 'create' | 'import' | 'groups' | 'security';
+type Panel = 'none' | 'create' | 'import' | 'groups' | 'security' | 'license';
 type ImportKind = 'local' | 'remote';
 type Manage = 'attach' | 'process';
 
@@ -65,6 +66,11 @@ export class DashboardPage implements OnInit, OnDestroy {
   readonly totpError = signal<string | null>(null);
   readonly totpDisableOpen = signal(false);
   readonly totpDraft = { code: '', password: '' };
+
+  readonly license = signal<LicenseStatus | null>(null);
+  readonly licenseBusy = signal(false);
+  readonly licenseError = signal<string | null>(null);
+  readonly licenseDraft = { text: '' };
 
   readonly selectedCount = computed(() => this.selectedIds().size);
 
@@ -149,10 +155,11 @@ export class DashboardPage implements OnInit, OnDestroy {
 
   load(): void {
     this.loading.set(true);
-    forkJoin({ servers: this.api.servers(), groups: this.api.groups() }).subscribe({
-      next: ({ servers, groups }) => {
+    forkJoin({ servers: this.api.servers(), groups: this.api.groups(), license: this.api.licenseStatus() }).subscribe({
+      next: ({ servers, groups, license }) => {
         this.servers.set(servers);
         this.groups.set(groups);
+        this.license.set(license);
         this.pruneSelection(servers);
         this.loading.set(false);
       },
@@ -168,6 +175,81 @@ export class DashboardPage implements OnInit, OnDestroy {
     const next = this.panel() === panel ? 'none' : panel;
     this.panel.set(next);
     if (next === 'security') this.loadTotp();
+    if (next === 'license') this.loadLicense();
+  }
+
+  // ---- Licença offline ----
+
+  loadLicense(): void {
+    this.licenseError.set(null);
+    this.api.licenseStatus().subscribe({
+      next: (status) => this.license.set(status),
+      error: (err) => this.licenseError.set(readError(err, 'Falha ao carregar a licença.')),
+    });
+  }
+
+  applyLicense(): void {
+    const text = this.licenseDraft.text.trim();
+    if (!text || this.licenseBusy()) return;
+    this.licenseBusy.set(true);
+    this.licenseError.set(null);
+    this.api.applyLicense(text).subscribe({
+      next: (status) => {
+        this.license.set(status);
+        this.licenseDraft.text = '';
+        this.licenseBusy.set(false);
+      },
+      error: (err) => {
+        this.licenseError.set(readError(err, 'Licença inválida.'));
+        this.licenseBusy.set(false);
+      },
+    });
+  }
+
+  removeLicense(): void {
+    if (!confirm(this.i18n.t('license.removeConfirm'))) return;
+    this.licenseBusy.set(true);
+    this.licenseError.set(null);
+    this.api.removeLicense().subscribe({
+      next: ({ license }) => {
+        this.license.set(license);
+        this.licenseBusy.set(false);
+      },
+      error: (err) => {
+        this.licenseError.set(readError(err, 'Falha ao remover a licença.'));
+        this.licenseBusy.set(false);
+      },
+    });
+  }
+
+  licenseStateLabel(state: LicenseStatus['state']): string {
+    return this.i18n.t(`license.state.${state}`);
+  }
+
+  licenseBadge(): string {
+    const status = this.license();
+    if (!status) return '';
+    if (status.state === 'trial') return this.i18n.t('license.badge.trial', { days: status.trial.daysLeft });
+    if (status.state === 'expired') return this.i18n.t('license.badge.expired');
+    if (status.state === 'invalid') return this.i18n.t('license.badge.invalid');
+    if (status.state === 'none') return this.i18n.t('license.badge.none');
+    return '';
+  }
+
+  licenseTrialLeft(status: LicenseStatus): string {
+    return this.i18n.t('license.trialLeft', { days: status.trial.daysLeft });
+  }
+
+  licenseExpiry(status: LicenseStatus): string {
+    if (!status.expiresAt) return this.i18n.t('license.perpetual');
+    const date = new Date(status.expiresAt).toLocaleDateString(this.i18n.lang() === 'pt' ? 'pt-BR' : 'en-US');
+    return status.daysLeft === null ? date : `${date} (${this.i18n.t('license.daysLeft', { days: status.daysLeft })})`;
+  }
+
+  licenseServers(status: LicenseStatus): string {
+    return status.maxServers === null
+      ? this.i18n.t('license.unlimited')
+      : this.i18n.t('license.serverCount', { count: status.maxServers });
   }
 
   // ---- Verificação em duas etapas (TOTP) ----

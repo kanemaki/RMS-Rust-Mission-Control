@@ -13,6 +13,7 @@ export const dataDir = process.env.RMC_DATA_DIR
 
 export const publicDir = path.join(agentRoot, 'public');
 export const configFile = path.join(dataDir, 'config.json');
+export const licenseFile = path.join(dataDir, 'license.json');
 export const dbFile = path.join(dataDir, 'mission-control.db');
 export const logsDir = path.join(dataDir, 'logs');
 export const backupsDir = path.join(dataDir, 'backups');

@@ -19,6 +19,7 @@ import { logBus } from './logbus.js';
 import { readConfig, writeConfig, launchPatch, validateValues, withoutSecrets } from './cfg.js';
 import { createBackup, deleteBackup, listBackups, restoreBackup } from './backups.js';
 import { audit, listAudit, listSamples, listSamplesRange } from './db.js';
+import { applyLicense, assertServerLimit, licenseStatus, removeLicense } from './license.js';
 import { sendDiscord } from './discord.js';
 import { scanInstall } from './discover.js';
 import {
@@ -136,6 +137,43 @@ export function createApi({ secureCookies = false, version = '0.1.0' } = {}) {
 
   router.use(requireAuth);
 
+  // Licença offline: o painel lê o estado e aceita o JSON assinado colado pelo
+  // cliente. Nada aqui faz chamada de rede.
+  router.get('/license', (req, res) => {
+    res.json(licenseStatus());
+  });
+
+  router.post('/license', (req, res) => {
+    try {
+      const status = applyLicense(req.body?.text);
+      audit('license_applied', { detail: status.licenseId ?? status.state, ip: req.ip });
+      res.json(status);
+    } catch (err) {
+      audit('license_rejected', { detail: err.message, ip: req.ip });
+      throw err;
+    }
+  });
+
+  router.delete('/license', (req, res) => {
+    const removed = removeLicense();
+    audit('license_removed', { detail: removed ? 'removed' : 'absent', ip: req.ip });
+    res.json({ ok: true, removed, license: licenseStatus() });
+  });
+
+  // Modo somente leitura: licença expirada/inválida mantém servidores, console,
+  // backups e restore funcionando, mas bloqueia mudanças de configuração.
+  const requireWritable = (req, res, next) => {
+    const status = licenseStatus();
+    if (!status.readOnly) {
+      next();
+      return;
+    }
+    res.status(403).json({
+      error: status.error ?? 'Licença expirada ou inválida: o painel está em modo somente leitura.',
+      license: status,
+    });
+  };
+
   router.get('/auth/totp', (req, res) => {
     const { totp } = loadConfig().auth;
     res.json({
@@ -188,13 +226,13 @@ export function createApi({ secureCookies = false, version = '0.1.0' } = {}) {
     res.json(listGroups());
   });
 
-  router.post('/groups', (req, res) => {
+  router.post('/groups', requireWritable, (req, res) => {
     const group = addGroup(req.body ?? {});
     audit('group_create', { detail: group.name, ip: req.ip });
     res.status(201).json(group);
   });
 
-  router.patch('/groups/:id', (req, res) => {
+  router.patch('/groups/:id', requireWritable, (req, res) => {
     const group = updateGroup(req.params.id, req.body ?? {});
     if (!group) {
       res.status(404).json({ error: 'Grupo não encontrado.' });
@@ -204,7 +242,7 @@ export function createApi({ secureCookies = false, version = '0.1.0' } = {}) {
     res.json(group);
   });
 
-  router.delete('/groups/:id', (req, res) => {
+  router.delete('/groups/:id', requireWritable, (req, res) => {
     if (!removeGroup(req.params.id)) {
       res.status(404).json({ error: 'Grupo não encontrado.' });
       return;
@@ -224,7 +262,8 @@ export function createApi({ secureCookies = false, version = '0.1.0' } = {}) {
     );
   });
 
-  router.post('/servers', (req, res) => {
+  router.post('/servers', requireWritable, (req, res) => {
+    assertServerLimit(loadConfig().servers.length);
     const server = addServer(req.body ?? {});
     runtimeManager.sync(loadConfig().servers);
     audit('server_create', { serverId: server.id, detail: server.name, ip: req.ip });
@@ -237,7 +276,7 @@ export function createApi({ secureCookies = false, version = '0.1.0' } = {}) {
     res.json({ ...publicServer(server), status: runtimeManager.get(server.id)?.status() ?? null });
   });
 
-  router.patch('/servers/:id', (req, res) => {
+  router.patch('/servers/:id', requireWritable, (req, res) => {
     const server = requireServer(req, res);
     if (!server) return;
     if (runtimeManager.get(server.id)?.wipeInProgress) {
@@ -249,7 +288,7 @@ export function createApi({ secureCookies = false, version = '0.1.0' } = {}) {
     res.json({ ...publicServer(updated), status: runtimeManager.get(updated.id)?.status() ?? null });
   });
 
-  router.delete('/servers/:id', async (req, res) => {
+  router.delete('/servers/:id', requireWritable, async (req, res) => {
     const server = requireServer(req, res);
     if (!server) return;
     const runtime = runtimeManager.get(server.id);
@@ -378,7 +417,7 @@ export function createApi({ secureCookies = false, version = '0.1.0' } = {}) {
     res.json(withoutSecrets(readConfig(server)));
   });
 
-  router.put('/servers/:id/config', (req, res) => {
+  router.put('/servers/:id/config', requireWritable, (req, res) => {
     const server = requireServer(req, res);
     if (!server) return;
     const values = req.body?.values ?? {};
@@ -464,7 +503,7 @@ export function createApi({ secureCookies = false, version = '0.1.0' } = {}) {
     res.json(status);
   });
 
-  router.post('/servers/:id/oxide/install', async (req, res) => {
+  router.post('/servers/:id/oxide/install', requireWritable, async (req, res) => {
     const server = requireServer(req, res);
     if (!server) return;
     const runtime = runtimeManager.get(server.id);
@@ -488,7 +527,7 @@ export function createApi({ secureCookies = false, version = '0.1.0' } = {}) {
     res.json(plugins.map((plugin) => ({ ...plugin, loaded: loaded.has(plugin.name.toLowerCase()) })));
   });
 
-  router.post('/servers/:id/oxide/plugins', async (req, res) => {
+  router.post('/servers/:id/oxide/plugins', requireWritable, async (req, res) => {
     const server = requireServer(req, res);
     if (!server) return;
     const url = req.body?.url;
@@ -508,7 +547,7 @@ export function createApi({ secureCookies = false, version = '0.1.0' } = {}) {
     throw new ValidationError('Informe a URL do uMod ou o conteúdo do plugin.');
   });
 
-  router.delete('/servers/:id/oxide/plugins/:name', (req, res) => {
+  router.delete('/servers/:id/oxide/plugins/:name', requireWritable, (req, res) => {
     const server = requireServer(req, res);
     if (!server) return;
     const result = deletePlugin(server, req.params.name);
@@ -522,7 +561,7 @@ export function createApi({ secureCookies = false, version = '0.1.0' } = {}) {
     res.json(readPluginConfig(server, req.params.name));
   });
 
-  router.put('/servers/:id/oxide/plugins/:name/config', (req, res) => {
+  router.put('/servers/:id/oxide/plugins/:name/config', requireWritable, (req, res) => {
     const server = requireServer(req, res);
     if (!server) return;
     const result = writePluginConfig(server, req.params.name, req.body?.raw);
