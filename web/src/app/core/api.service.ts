@@ -6,13 +6,20 @@ import {
   Backup,
   BatchAction,
   BatchResponse,
+  ChatFilter,
+  ChatMessage,
   Group,
   InstallScan,
   LicenseStatus,
   LogEntry,
+  ModerationEntry,
+  ModerationResponse,
   OxidePlugin,
   OxidePluginConfig,
   OxideStatus,
+  PlayerAction,
+  PlayerDetail,
+  PlayersResponse,
   SamplesResponse,
   Server,
   ServerConfig,
@@ -161,6 +168,48 @@ export class ApiService {
 
   samples(id: string, range: '24h' | '7d' | '30d'): Observable<SamplesResponse> {
     return this.http.get<SamplesResponse>(`/api/servers/${id}/samples`, { params: { range } });
+  }
+
+  players(id: string, search = ''): Observable<PlayersResponse> {
+    return this.http.get<PlayersResponse>(`/api/servers/${id}/players`, { params: { search } });
+  }
+
+  player(id: string, steamId: string): Observable<PlayerDetail> {
+    return this.http.get<PlayerDetail>(`/api/servers/${id}/players/${steamId}`);
+  }
+
+  setPlayerNote(id: string, steamId: string, note: string): Observable<{ steamId: string; note: string }> {
+    return this.http.patch<{ steamId: string; note: string }>(`/api/servers/${id}/players/${steamId}`, { note });
+  }
+
+  moderate(
+    id: string,
+    steamId: string,
+    payload: { action: PlayerAction; reason?: string; minutes?: number | null; sync?: boolean; name?: string },
+  ): Observable<ModerationResponse> {
+    return this.http.post<ModerationResponse>(`/api/servers/${id}/players/${steamId}/action`, payload);
+  }
+
+  moderation(id: string, steamId?: string): Observable<ModerationEntry[]> {
+    return this.http.get<ModerationEntry[]>(`/api/servers/${id}/moderation`, {
+      params: steamId ? { steamId } : {},
+    });
+  }
+
+  chat(id: string, flagged = false): Observable<ChatMessage[]> {
+    return this.http.get<ChatMessage[]>(`/api/servers/${id}/chat`, { params: flagged ? { flagged: '1' } : {} });
+  }
+
+  say(id: string, message: string): Observable<{ response: string }> {
+    return this.http.post<{ response: string }>(`/api/servers/${id}/chat`, { message });
+  }
+
+  chatFilter(id: string): Observable<ChatFilter> {
+    return this.http.get<ChatFilter>(`/api/servers/${id}/chat-filter`);
+  }
+
+  saveChatFilter(id: string, filter: ChatFilter): Observable<ChatFilter> {
+    return this.http.put<ChatFilter>(`/api/servers/${id}/chat-filter`, filter);
   }
 
   config(id: string): Observable<ServerConfig> {

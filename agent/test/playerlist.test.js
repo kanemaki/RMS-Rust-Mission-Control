@@ -23,13 +23,17 @@ const REAL = JSON.stringify([
 test('interpreta o array JSON real do playerlist', () => {
   const parsed = parsePlayerList(REAL);
   assert.equal(parsed.players, 1);
+  assert.equal(parsed.structured, true);
   assert.deepEqual(parsed.names, ['Buiuia']);
+  assert.deepEqual(parsed.list, [{ steamId: '76561198876519753', name: 'Buiuia', ping: 0 }]);
 });
 
 test('array vazio significa zero jogadores', () => {
   const parsed = parsePlayerList('[]');
   assert.equal(parsed.players, 0);
+  assert.equal(parsed.structured, true);
   assert.deepEqual(parsed.names, []);
+  assert.deepEqual(parsed.list, []);
 });
 
 test('conta múltiplos jogadores e ignora nomes vazios', () => {
@@ -41,13 +45,30 @@ test('conta múltiplos jogadores e ignora nomes vazios', () => {
 });
 
 test('aceita formato de texto com máximo', () => {
-  assert.deepEqual(parsePlayerList('Players: 3 / 50'), { players: 3, maxPlayers: 50, names: [] });
-  assert.deepEqual(parsePlayerList('3 / 50'), { players: 3, maxPlayers: 50, names: [] });
+  assert.deepEqual(parsePlayerList('Players: 3 / 50'), {
+    players: 3,
+    maxPlayers: 50,
+    names: [],
+    list: [],
+    structured: false,
+  });
+  assert.deepEqual(parsePlayerList('3 / 50'), {
+    players: 3,
+    maxPlayers: 50,
+    names: [],
+    list: [],
+    structured: false,
+  });
 });
 
 test('aceita lista de steamids sem rótulo', () => {
   const parsed = parsePlayerList('76561198876519753\n76561198000000001');
   assert.equal(parsed.players, 2);
+  assert.equal(parsed.structured, true);
+  assert.deepEqual(
+    parsed.list.map((entry) => entry.steamId),
+    ['76561198876519753', '76561198000000001'],
+  );
 });
 
 test('resposta vazia ou irreconhecível devolve null', () => {

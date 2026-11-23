@@ -10,6 +10,8 @@ import { serverLogsDir } from './paths.js';
 import { recordSample } from './db.js';
 import { createLineSplitter } from './lines.js';
 import { parsePlayerList } from './playerlist.js';
+import { trackPlayers, closeSessions, dueBans, resolveBans, recordModeration, normalizeAction, normalizeSteamId } from './players.js';
+import { parseChatMessage, recordChat } from './chat.js';
 import { createBackup } from './backups.js';
 import { ConflictError } from './errors.js';
 import { notifyDiscord } from './discord.js';
@@ -54,6 +56,8 @@ export class ServerRuntime {
     this.scheduledBackupAt = null;
     this.readyTimer = null;
     this.playerTimer = null;
+    this.banTimer = setInterval(() => void this.#expireBans(), 30000);
+    this.banTimer.unref?.();
     this.logStream = null;
     this.logStreamDay = null;
     this.lastLines = [];
@@ -149,6 +153,9 @@ export class ServerRuntime {
       throw new ConflictError('Outra operação está em andamento.');
     }
     if (this.state === 'stopped' || this.state === 'error') {
+      // O runtime já está parado, mas podem existir sessões abertas de uma
+      // execução anterior (agente reiniciado, processo morto por fora).
+      closeSessions(this.server.id);
       return this.status();
     }
     if (this.remote) {
@@ -157,6 +164,7 @@ export class ServerRuntime {
       this.rcon = null;
       clearInterval(this.playerTimer);
       this.players = null;
+      closeSessions(this.server.id);
       this.stoppedAt = Date.now();
       this.#setState('stopped');
       this.#log('agent', 'Desconectado do servidor remoto.');
@@ -240,14 +248,89 @@ export class ServerRuntime {
     return response;
   }
 
+  /**
+   * Executa uma ação de moderação via RCON e registra no histórico.
+   * Ban temporizado é implementado como `banid` + `unban` agendado, porque o
+   * Rust vanilla não aceita duração no comando de ban.
+   */
+  async moderate({ action, steamId, name = '', reason = '', minutes = null, actor = 'panel', synced = null }) {
+    if (!this.rcon?.connected) throw new ConflictError('RCON não está conectado.');
+    const normalizedAction = normalizeAction(action);
+    const id = normalizeSteamId(steamId);
+    const cleanReason = String(reason ?? '')
+      .replace(/[\r\n"]/g, ' ')
+      .trim()
+      .slice(0, 300);
+    const cleanName = String(name ?? '')
+      .replace(/[\r\n"]/g, ' ')
+      .trim()
+      .slice(0, 64) || id;
+    const now = Date.now();
+    const expiresAt = normalizedAction === 'ban' && minutes ? now + minutes * 60000 : null;
+
+    let command;
+    if (normalizedAction === 'kick') command = `kick ${id}${cleanReason ? ` "${cleanReason}"` : ''}`;
+    else if (normalizedAction === 'ban') command = `banid ${id}${cleanReason ? ` "${cleanReason}"` : ''}`;
+    else if (normalizedAction === 'unban') command = `unban ${id}`;
+    else if (normalizedAction === 'mute') command = `mute ${id}`;
+    else if (normalizedAction === 'unmute') command = `unmute ${id}`;
+    else if (normalizedAction === 'owner') command = `ownerid ${id} "${cleanName}" "${cleanReason || 'painel'}"`;
+    else command = `removeowner ${id} "${cleanName}" "${cleanReason || 'painel'}"`;
+
+    const response = await this.command(command);
+    if (normalizedAction === 'unban') resolveBans(this.server.id, id, now);
+    const moderation = recordModeration({
+      serverId: this.server.id,
+      steamId: id,
+      name,
+      action: normalizedAction,
+      reason: cleanReason,
+      minutes: normalizedAction === 'ban' ? minutes : null,
+      expiresAt,
+      actor,
+      synced,
+      ts: now,
+    });
+    return { response, moderation };
+  }
+
+  async #expireBans() {
+    if (this.state !== 'running' || !this.rcon?.connected) return;
+    const due = dueBans(this.server.id);
+    for (const ban of due) {
+      try {
+        await this.command(`unban ${ban.steamId}`);
+        resolveBans(this.server.id, ban.steamId);
+        recordModeration({
+          serverId: this.server.id,
+          steamId: ban.steamId,
+          name: ban.name,
+          action: 'unban',
+          reason: 'Expiração automática do ban temporizado',
+          actor: 'scheduler',
+        });
+        this.#log('agent', `Ban temporizado expirado: ${ban.name} (${ban.steamId}).`);
+        void this.#notify(
+          'moderation',
+          'Ban temporizado expirado',
+          `${ban.name} (${ban.steamId}) foi desbanido automaticamente.`,
+        );
+      } catch (error) {
+        this.#log('agent', `Falha ao remover ban expirado de ${ban.steamId}: ${error.message}`);
+      }
+    }
+  }
+
   dispose() {
     clearTimeout(this.restartTimer);
     clearTimeout(this.wipeTimer);
     clearTimeout(this.backupTimer);
     clearTimeout(this.readyTimer);
     clearInterval(this.playerTimer);
+    clearInterval(this.banTimer);
     this.rcon?.stop();
     this.#closeLogStream();
+    closeSessions(this.server.id);
   }
 
   async #connectRemote() {
@@ -389,6 +472,7 @@ export class ServerRuntime {
       this.pid = null;
       this.stoppedAt = Date.now();
       this.players = null;
+      closeSessions(this.server.id);
       this.#log('agent', `Processo encerrado (código ${code ?? 'null'}${signal ? `, sinal ${signal}` : ''}).`);
 
       const wasIntentional = this.intentionalStop || this.state === 'stopping';
@@ -428,6 +512,24 @@ export class ServerRuntime {
     rcon.on('message', (message) => {
       if (message?.Type === 'Chat') {
         this.#log('chat', formatChat(message));
+        const parsed = parseChatMessage(message);
+        if (parsed) {
+          const entry = recordChat({
+            serverId: this.server.id,
+            ...parsed,
+            filter: this.server.chatFilter,
+          });
+          if (entry) {
+            logBus.chat(this.server.id, entry);
+            if (entry.flagged) {
+              void this.#notify(
+                'moderation',
+                'Mensagem sinalizada no chat',
+                `${entry.username ?? 'Jogador'}: ${entry.message}\nRegra: ${entry.rule}`,
+              );
+            }
+          }
+        }
       } else if (message?.Message) {
         this.#log('rcon', String(message.Message));
       }
@@ -448,6 +550,7 @@ export class ServerRuntime {
       this.players = parsed.players;
       if (parsed.maxPlayers) this.maxPlayers = parsed.maxPlayers;
       this.playerNames = parsed.names;
+      if (parsed.structured) trackPlayers(this.server.id, parsed.list);
       logBus.status(this.server.id, this.status());
     } catch {
       /* silencioso: o próximo ciclo tenta de novo */

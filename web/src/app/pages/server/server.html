@@ -63,6 +63,12 @@
     <button type="button" [class.active]="tab() === 'console'" (click)="setTab('console')">
       {{ 'server.tab.console' | t }}
     </button>
+    <button type="button" [class.active]="tab() === 'players'" (click)="setTab('players')">
+      {{ 'server.tab.players' | t }}
+    </button>
+    <button type="button" [class.active]="tab() === 'chat'" (click)="setTab('chat')">
+      {{ 'server.tab.chat' | t }}
+    </button>
     @if (!isRemote()) {
       <button type="button" [class.active]="tab() === 'config'" (click)="setTab('config')">server.cfg</button>
       <button type="button" [class.active]="tab() === 'metrics'" (click)="setTab('metrics')">
@@ -125,6 +131,273 @@
         @if (!s.status?.rconConnected) {
           <p class="hint">{{ 'server.rconOffline' | t }}</p>
         }
+      </section>
+    }
+
+    @case ('players') {
+      <section class="panel players-panel">
+        @if (selectedPlayer(); as player) {
+          <div class="panel-head">
+            <div>
+              <button class="btn sm ghost" type="button" (click)="closePlayer()">← {{ 'players.back' | t }}</button>
+              <h2>{{ player.name }}</h2>
+              <p class="muted small mono">{{ player.steamId }}</p>
+            </div>
+            <div class="player-actions">
+              @if (player.online) {
+                <button class="btn sm" type="button" [disabled]="!s.status?.rconConnected || playerBusy() !== null" (click)="startAction('kick')">
+                  {{ 'players.action.kick' | t }}
+                </button>
+              }
+              @if (player.banned) {
+                <button class="btn sm" type="button" [disabled]="!s.status?.rconConnected || playerBusy() !== null" (click)="startAction('unban')">
+                  {{ 'players.action.unban' | t }}
+                </button>
+              } @else {
+                <button class="btn sm danger" type="button" [disabled]="!s.status?.rconConnected || playerBusy() !== null" (click)="startAction('ban')">
+                  {{ 'players.action.ban' | t }}
+                </button>
+              }
+              @if (player.muted) {
+                <button class="btn sm" type="button" [disabled]="!s.status?.rconConnected || playerBusy() !== null" (click)="startAction('unmute')">
+                  {{ 'players.action.unmute' | t }}
+                </button>
+              } @else {
+                <button class="btn sm" type="button" [disabled]="!s.status?.rconConnected || playerBusy() !== null" (click)="startAction('mute')">
+                  {{ 'players.action.mute' | t }}
+                </button>
+              }
+              @if (player.owner) {
+                <button class="btn sm" type="button" [disabled]="!s.status?.rconConnected || playerBusy() !== null" (click)="startAction('unowner')">
+                  {{ 'players.action.unowner' | t }}
+                </button>
+              } @else {
+                <button class="btn sm" type="button" [disabled]="!s.status?.rconConnected || playerBusy() !== null" (click)="startAction('owner')">
+                  {{ 'players.action.owner' | t }}
+                </button>
+              }
+            </div>
+          </div>
+
+          @if (!s.status?.rconConnected) {
+            <p class="hint">{{ 'players.action.rconOffline' | t }}</p>
+          }
+
+          @if (actionDraft(); as draft) {
+            <form class="action-form" (ngSubmit)="confirmAction()">
+              <h3>{{ actionLabel(draft.action) }}</h3>
+              <label>
+                {{ 'players.action.reason' | t }}
+                <input type="text" name="reason" maxlength="300" [ngModel]="draft.reason" (ngModelChange)="setActionReason($event)" />
+              </label>
+              @if (draft.action === 'ban') {
+                <label>
+                  {{ 'players.action.minutes' | t }}
+                  <input type="number" name="minutes" min="1" [ngModel]="draft.minutes" (ngModelChange)="setActionMinutes($event)" />
+                </label>
+                <label class="check">
+                  <input type="checkbox" name="sync" [ngModel]="draft.sync" (ngModelChange)="setActionSync($event)" />
+                  {{ 'players.action.sync' | t }}
+                </label>
+              }
+              @if (draft.action === 'owner' || draft.action === 'unowner') {
+                <p class="hint">{{ 'players.action.ownerHint' | t }}</p>
+              }
+              <div class="action-buttons">
+                <button class="btn sm primary" type="submit" [disabled]="playerBusy() !== null">{{ 'players.action.confirm' | t }}</button>
+                <button class="btn sm ghost" type="button" (click)="cancelAction()">{{ 'common.cancel' | t }}</button>
+              </div>
+            </form>
+          }
+
+          <div class="player-grid">
+            <div class="player-card">
+              <span class="muted small">{{ 'players.firstSeen' | t }}</span>
+              <strong>{{ date(player.firstSeen) }}</strong>
+            </div>
+            <div class="player-card">
+              <span class="muted small">{{ 'players.lastSeen' | t }}</span>
+              <strong>{{ date(player.lastSeen) }}</strong>
+            </div>
+            <div class="player-card">
+              <span class="muted small">{{ 'players.sessionCount' | t }}</span>
+              <strong>{{ player.sessionCount }}</strong>
+            </div>
+            <div class="player-card">
+              <span class="muted small">{{ 'players.chatCount' | t }}</span>
+              <strong>{{ player.chatCount }}</strong>
+            </div>
+          </div>
+
+          <div class="note-box">
+            <label>
+              {{ 'players.note' | t }}
+              <textarea rows="3" [placeholder]="'players.notePlaceholder' | t" [ngModel]="noteDraft()" (ngModelChange)="noteDraft.set($event)"></textarea>
+            </label>
+            <button class="btn sm primary" type="button" [disabled]="playerBusy() === 'note'" (click)="saveNote()">{{ 'common.save' | t }}</button>
+          </div>
+
+          <h3 class="section-title">{{ 'players.history' | t }}</h3>
+          @if (!player.moderation.length) {
+            <div class="empty">{{ 'players.historyEmpty' | t }}</div>
+          } @else {
+            <ul class="mod-list">
+              @for (entry of player.moderation; track entry.id) {
+                <li>
+                  <span class="pill" [class.danger]="entry.action === 'ban'" [class.ok]="entry.action === 'owner'">{{ actionLabel(entry.action) }}</span>
+                  <div class="mod-info">
+                    <span>{{ entry.reason || '—' }}</span>
+                    <span class="muted small">{{ moderationNote(entry) }}</span>
+                  </div>
+                </li>
+              }
+            </ul>
+          }
+
+          <h3 class="section-title">{{ 'players.sessionsTitle' | t }}</h3>
+          @if (!player.sessions.length) {
+            <div class="empty">{{ 'players.sessionsEmpty' | t }}</div>
+          } @else {
+            <ul class="session-list">
+              @for (session of player.sessions; track session.id) {
+                <li>
+                  <span class="mono small">{{ date(session.joined_at) }}</span>
+                  <span class="muted small">→ {{ session.left_at ? date(session.left_at) : '—' }}</span>
+                </li>
+              }
+            </ul>
+          }
+        } @else {
+          <div class="panel-head">
+            <div>
+              <h2>{{ 'players.title' | t }}</h2>
+              <p class="muted small">{{ 'players.subtitle' | t }}</p>
+            </div>
+            <form class="player-search" (ngSubmit)="searchPlayers()">
+              <input type="search" name="search" [placeholder]="'players.search' | t" [ngModel]="playerSearch()" (ngModelChange)="playerSearch.set($event)" />
+              <button class="btn sm" type="submit">{{ 'common.scan' | t }}</button>
+            </form>
+          </div>
+
+          @if (!players()) {
+            <div class="empty">{{ 'common.loading' | t }}</div>
+          } @else {
+            <h3 class="section-title">{{ 'players.online' | t }}</h3>
+            @if (!players()!.online.length) {
+              <div class="empty">{{ 'players.emptyOnline' | t }}</div>
+            } @else {
+              <ul class="player-list">
+                @for (player of players()!.online; track player.steamId) {
+                  <li>
+                    <button class="player-row" type="button" (click)="openPlayer(player.steamId)">
+                      <span class="dot online"></span>
+                      <span class="player-name">{{ player.name }}</span>
+                      <span class="mono muted small">{{ player.steamId }}</span>
+                      @if (playerBadge(player)) {
+                        <span class="pill warn">{{ playerBadge(player) }}</span>
+                      }
+                    </button>
+                  </li>
+                }
+              </ul>
+            }
+
+            <h3 class="section-title">{{ 'players.recent' | t }}</h3>
+            @if (!players()!.recent.length) {
+              <div class="empty">{{ 'players.empty' | t }}</div>
+            } @else {
+              <ul class="player-list">
+                @for (player of players()!.recent; track player.steamId) {
+                  <li>
+                    <button class="player-row" type="button" (click)="openPlayer(player.steamId)">
+                      <span class="dot" [class.online]="player.online"></span>
+                      <span class="player-name">{{ player.name }}</span>
+                      <span class="mono muted small">{{ player.steamId }}</span>
+                      <span class="muted small">{{ date(player.lastSeen) }}</span>
+                      @if (playerBadge(player)) {
+                        <span class="pill warn">{{ playerBadge(player) }}</span>
+                      }
+                    </button>
+                  </li>
+                }
+              </ul>
+            }
+          }
+        }
+      </section>
+    }
+
+    @case ('chat') {
+      <section class="panel chat-panel">
+        <div class="panel-head">
+          <div>
+            <h2>{{ 'chat.title' | t }}</h2>
+            <p class="muted small">{{ 'chat.subtitle' | t }}</p>
+          </div>
+          <div class="chat-tools">
+            <button class="btn sm" [class.primary]="!chatFlaggedOnly()" type="button" (click)="setChatFlagged(false)">
+              {{ 'chat.all' | t }}
+            </button>
+            <button class="btn sm" [class.primary]="chatFlaggedOnly()" type="button" (click)="setChatFlagged(true)">
+              {{ 'chat.flagged' | t }}
+            </button>
+          </div>
+        </div>
+
+        <div class="chat-list">
+          @for (message of chat(); track message.id) {
+            <div class="chat-line" [class.flagged]="message.flagged">
+              <span class="ts">{{ date(message.ts) }}</span>
+              <span class="chat-user">{{ message.username || message.steamId || '—' }}</span>
+              <span class="chat-text">{{ message.message }}</span>
+              @if (message.flagged && message.rule) {
+                <span class="pill warn">{{ 'chat.rule' | t }}: {{ message.rule }}</span>
+              }
+            </div>
+          } @empty {
+            <div class="empty">{{ chatFlaggedOnly() ? ('chat.emptyFlagged' | t) : ('chat.empty' | t) }}</div>
+          }
+        </div>
+
+        <form class="command" (ngSubmit)="sendSay()">
+          <span class="prompt mono">say ›</span>
+          <input
+            name="say"
+            maxlength="200"
+            [placeholder]="'chat.sayPlaceholder' | t"
+            [ngModel]="chatDraft()"
+            (ngModelChange)="chatDraft.set($event)"
+            [disabled]="!s.status?.rconConnected"
+          />
+          <button class="btn sm primary" type="submit" [disabled]="!s.status?.rconConnected || chatBusy() || !chatDraft().trim()">
+            {{ 'common.send' | t }}
+          </button>
+        </form>
+
+        <div class="chat-filter">
+          <h3 class="section-title">{{ 'chat.filter.title' | t }}</h3>
+          <p class="muted small">{{ 'chat.filter.subtitle' | t }}</p>
+          <label class="check">
+            <input type="checkbox" [ngModel]="chatFilterDraft().enabled" (ngModelChange)="setChatFilterEnabled($event)" />
+            {{ 'chat.filter.enabled' | t }}
+          </label>
+          <label>
+            {{ 'chat.filter.keywords' | t }}
+            <input
+              type="text"
+              [placeholder]="'chat.filter.keywordsHint' | t"
+              [ngModel]="chatFilterText()"
+              (ngModelChange)="chatFilterText.set($event)"
+            />
+          </label>
+          <label class="check">
+            <input type="checkbox" [ngModel]="chatFilterDraft().notifyDiscord" (ngModelChange)="setChatFilterNotify($event)" />
+            {{ 'chat.filter.notify' | t }}
+          </label>
+          <button class="btn sm primary" type="button" [disabled]="chatFilterSaving()" (click)="saveChatFilter()">
+            {{ 'common.save' | t }}
+          </button>
+        </div>
       </section>
     }
 

@@ -5,11 +5,11 @@ import { Subscription } from 'rxjs';
 import { ApiService } from '../../core/api.service';
 import { readError } from '../../core/auth.service';
 import { EventsService } from '../../core/events.service';
-import { Backup, BackupSchedule, DiscordEvents, ConfigField, LogEntry, OxidePlugin, OxidePluginConfig, OxideStatus, SamplesResponse, Sample, Server, ServerConfig, ServerState, WipeSchedule } from '../../core/models';
+import { Backup, BackupSchedule, ChatFilter, ChatMessage, DiscordEvents, ConfigField, LogEntry, ModerationEntry, OxidePlugin, OxidePluginConfig, OxideStatus, Player, PlayerAction, PlayerDetail, PlayersResponse, SamplesResponse, Sample, Server, ServerConfig, ServerState, WipeSchedule } from '../../core/models';
 import { I18nService } from '../../core/i18n.service';
 import { TPipe } from '../../shared/t.pipe';
 
-type Tab = 'console' | 'config' | 'metrics' | 'plugins' | 'backups' | 'settings';
+type Tab = 'console' | 'players' | 'chat' | 'config' | 'metrics' | 'plugins' | 'backups' | 'settings';
 type MetricsRange = '24h' | '7d' | '30d';
 
 interface ChartSeries {
@@ -68,6 +68,21 @@ export class ServerPage implements OnInit, OnDestroy {
   readonly metricsLoading = signal(false);
   readonly ranges: MetricsRange[] = ['24h', '7d', '30d'];
 
+  readonly players = signal<PlayersResponse | null>(null);
+  readonly playerSearch = signal('');
+  readonly selectedPlayer = signal<PlayerDetail | null>(null);
+  readonly playerBusy = signal<string | null>(null);
+  readonly noteDraft = signal('');
+  readonly actionDraft = signal<{ action: PlayerAction; reason: string; minutes: string; sync: boolean } | null>(null);
+
+  readonly chat = signal<ChatMessage[]>([]);
+  readonly chatFlaggedOnly = signal(false);
+  readonly chatDraft = signal('');
+  readonly chatBusy = signal(false);
+  readonly chatFilterDraft = signal<ChatFilter>({ enabled: false, keywords: [], notifyDiscord: true });
+  readonly chatFilterText = signal('');
+  readonly chatFilterSaving = signal(false);
+
   private readonly chartW = 600;
   private readonly chartH = 140;
   private readonly chartPad = 2;
@@ -115,9 +130,13 @@ export class ServerPage implements OnInit, OnDestroy {
     this.sub = this.events.events.subscribe((event) => {
       if (event.type === 'status' && event.serverId === this.id) {
         this.server.update((current) => (current ? { ...current, status: event.status } : current));
+        if (event.status.state !== 'running' && this.tab() === 'players') this.loadPlayers();
       }
       if (event.type === 'log' && event.serverId === this.id) {
         this.logs.update((list) => [...list.slice(-799), event.entry]);
+      }
+      if (event.type === 'chat' && event.serverId === this.id) {
+        this.chat.update((list) => [...list.slice(-499), event.entry]);
       }
     });
     this.load();
@@ -164,6 +183,7 @@ export class ServerPage implements OnInit, OnDestroy {
       error: (err) => this.error.set(readError(err, 'Servidor não encontrado.')),
     });
     this.api.logs(this.id, 400).subscribe({ next: (logs) => this.logs.set(logs) });
+    this.loadChatFilter();
   }
 
   setTab(tab: Tab): void {
@@ -172,6 +192,8 @@ export class ServerPage implements OnInit, OnDestroy {
     if (tab === 'metrics') this.loadMetrics();
     if (tab === 'plugins') this.loadOxide();
     if (tab === 'backups') this.loadBackups();
+    if (tab === 'players') this.loadPlayers();
+    if (tab === 'chat') this.loadChat();
   }
 
   loadOxide(): void {
@@ -346,6 +368,210 @@ export class ServerPage implements OnInit, OnDestroy {
     this.metricsRange.set(range);
     this.metrics.set(null);
     this.loadMetrics();
+  }
+
+  loadPlayers(): void {
+    this.api.players(this.id, this.playerSearch()).subscribe({
+      next: (data) => this.players.set(data),
+      error: (err) => this.error.set(readError(err, this.i18n.t('players.title'))),
+    });
+  }
+
+  searchPlayers(): void {
+    this.loadPlayers();
+  }
+
+  openPlayer(steamId: string): void {
+    this.playerBusy.set(steamId);
+    this.api.player(this.id, steamId).subscribe({
+      next: (detail) => {
+        this.playerBusy.set(null);
+        this.selectedPlayer.set(detail);
+        this.noteDraft.set(detail.note ?? '');
+        this.actionDraft.set(null);
+      },
+      error: (err) => {
+        this.playerBusy.set(null);
+        this.error.set(readError(err, this.i18n.t('players.action.failed')));
+      },
+    });
+  }
+
+  closePlayer(): void {
+    this.selectedPlayer.set(null);
+    this.actionDraft.set(null);
+  }
+
+  startAction(action: PlayerAction): void {
+    this.actionDraft.set({ action, reason: '', minutes: '', sync: action === 'ban' });
+  }
+
+  cancelAction(): void {
+    this.actionDraft.set(null);
+  }
+
+  setActionReason(value: string): void {
+    this.actionDraft.update((draft) => (draft ? { ...draft, reason: value } : draft));
+  }
+
+  setActionMinutes(value: string): void {
+    this.actionDraft.update((draft) => (draft ? { ...draft, minutes: value } : draft));
+  }
+
+  setActionSync(value: boolean): void {
+    this.actionDraft.update((draft) => (draft ? { ...draft, sync: value } : draft));
+  }
+
+  confirmAction(): void {
+    const draft = this.actionDraft();
+    const player = this.selectedPlayer();
+    if (!draft || !player) return;
+    const minutes = draft.minutes.trim() ? Number(draft.minutes) : null;
+    if (minutes != null && (!Number.isFinite(minutes) || minutes <= 0)) {
+      this.error.set(this.i18n.t('players.action.minutes'));
+      return;
+    }
+    this.playerBusy.set(draft.action);
+    this.api
+      .moderate(this.id, player.steamId, {
+        action: draft.action,
+        reason: draft.reason.trim() || undefined,
+        minutes: draft.action === 'ban' ? minutes : null,
+        sync: draft.action === 'ban' ? draft.sync : false,
+        name: player.name,
+      })
+      .subscribe({
+        next: (result) => {
+          this.playerBusy.set(null);
+          this.actionDraft.set(null);
+          let message = this.i18n.t('players.action.done', { action: this.actionLabel(draft.action) });
+          if (result.sync && result.sync.total) {
+            message += ` ${this.i18n.t('players.action.syncResult', {
+              applied: result.sync.applied,
+              total: result.sync.total,
+            })}`;
+          }
+          this.notice.set(message);
+          this.openPlayer(player.steamId);
+          this.loadPlayers();
+        },
+        error: (err) => {
+          this.playerBusy.set(null);
+          this.error.set(readError(err, this.i18n.t('players.action.failed')));
+        },
+      });
+  }
+
+  saveNote(): void {
+    const player = this.selectedPlayer();
+    if (!player) return;
+    this.playerBusy.set('note');
+    this.api.setPlayerNote(this.id, player.steamId, this.noteDraft()).subscribe({
+      next: (result) => {
+        this.playerBusy.set(null);
+        this.selectedPlayer.update((current) => (current ? { ...current, note: result.note } : current));
+        this.notice.set(this.i18n.t('players.noteSaved'));
+      },
+      error: (err) => {
+        this.playerBusy.set(null);
+        this.error.set(readError(err, this.i18n.t('players.action.failed')));
+      },
+    });
+  }
+
+  loadChat(): void {
+    this.api.chat(this.id, this.chatFlaggedOnly()).subscribe({
+      next: (list) => this.chat.set(list),
+      error: (err) => this.error.set(readError(err, this.i18n.t('chat.title'))),
+    });
+  }
+
+  setChatFlagged(flagged: boolean): void {
+    if (flagged === this.chatFlaggedOnly()) return;
+    this.chatFlaggedOnly.set(flagged);
+    this.loadChat();
+  }
+
+  sendSay(): void {
+    const message = this.chatDraft().trim();
+    if (!message) return;
+    this.chatBusy.set(true);
+    this.api.say(this.id, message).subscribe({
+      next: () => {
+        this.chatBusy.set(false);
+        this.chatDraft.set('');
+        this.notice.set(this.i18n.t('chat.saySent'));
+      },
+      error: (err) => {
+        this.chatBusy.set(false);
+        this.error.set(readError(err, this.i18n.t('chat.sayFailed')));
+      },
+    });
+  }
+
+  loadChatFilter(): void {
+    this.api.chatFilter(this.id).subscribe({
+      next: (filter) => {
+        this.chatFilterDraft.set(filter);
+        this.chatFilterText.set(filter.keywords.join(', '));
+      },
+    });
+  }
+
+  setChatFilterEnabled(value: boolean): void {
+    this.chatFilterDraft.update((draft) => ({ ...draft, enabled: value }));
+  }
+
+  setChatFilterNotify(value: boolean): void {
+    this.chatFilterDraft.update((draft) => ({ ...draft, notifyDiscord: value }));
+  }
+
+  saveChatFilter(): void {
+    const draft = this.chatFilterDraft();
+    const keywords = this.chatFilterText()
+      .split(',')
+      .map((item) => item.trim())
+      .filter(Boolean);
+    this.chatFilterSaving.set(true);
+    this.api.saveChatFilter(this.id, { ...draft, keywords }).subscribe({
+      next: (filter) => {
+        this.chatFilterSaving.set(false);
+        this.chatFilterDraft.set(filter);
+        this.chatFilterText.set(filter.keywords.join(', '));
+        this.notice.set(this.i18n.t('chat.filter.saved'));
+      },
+      error: (err) => {
+        this.chatFilterSaving.set(false);
+        this.error.set(readError(err, this.i18n.t('chat.filter.failed')));
+      },
+    });
+  }
+
+  actionLabel(action: PlayerAction): string {
+    return this.i18n.t(`players.action.${action}`);
+  }
+
+  actorLabel(actor: string): string {
+    const key = `players.actor.${actor}`;
+    const label = this.i18n.t(key);
+    return label === key ? actor : label;
+  }
+
+  playerBadge(player: Player): string {
+    if (player.banned) {
+      return player.banExpiresAt
+        ? this.i18n.t('players.banUntil', { date: this.date(player.banExpiresAt) })
+        : this.i18n.t('players.banned');
+    }
+    if (player.owner) return this.i18n.t('players.owner');
+    if (player.muted) return this.i18n.t('players.muted');
+    return '';
+  }
+
+  moderationNote(entry: ModerationEntry): string {
+    const parts = [this.date(entry.ts), this.actorLabel(entry.actor)];
+    if (entry.expiresAt) parts.push(this.i18n.t('players.banUntil', { date: this.date(entry.expiresAt) }));
+    return parts.join(' · ');
   }
 
   start(skipUpdate = false): void {

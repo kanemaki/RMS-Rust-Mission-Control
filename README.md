@@ -180,6 +180,16 @@ DELETE /api/servers/:id/backups/:name
 GET    /api/servers/:id/samples?limit=      últimas N amostras cruas
 GET    /api/servers/:id/samples?range=24h   séries agregadas (24h, 7d ou 30d)
 
+GET    /api/servers/:id/players?search=     jogadores online e recentes
+GET    /api/servers/:id/players/:steamId    perfil, sessões, moderação e nota
+PATCH  /api/servers/:id/players/:steamId    { note }
+POST   /api/servers/:id/players/:steamId/action  { action, reason?, minutes?, sync? }
+GET    /api/servers/:id/moderation?steamId= histórico de moderação
+GET    /api/servers/:id/chat?flagged=1      histórico do chat (só sinalizadas com flagged=1)
+POST   /api/servers/:id/chat                { message } anúncio no chat via say
+GET    /api/servers/:id/chat-filter
+PUT    /api/servers/:id/chat-filter         { enabled, keywords, notifyDiscord }
+
 GET    /api/servers/:id/oxide               status do Oxide e contagem de plugins
 POST   /api/servers/:id/oxide/install      instala/atualiza o Oxide (servidor parado)
 GET    /api/servers/:id/oxide/plugins
@@ -190,12 +200,39 @@ PUT    /api/servers/:id/oxide/plugins/:name/config       { raw }
 POST   /api/servers/:id/oxide/plugins/:name/load|unload|reload
 
 GET    /api/audit?limit=
-GET    /api/events                   SSE (status + logs)
+GET    /api/events                   SSE (status + logs + chat)
 ```
 
 O lote (`/api/servers/batch`) executa a ação em paralelo e devolve o resultado por servidor
 (`results[].ok`/`error`) — uma falha não derruba as demais. O lote nunca roda a atualização
 automática do SteamCMD; para atualizar, use o `update` individual de cada servidor.
+
+## Jogadores, moderação e chat
+
+O agente consulta `playerlist` por RCON em intervalo curto e mantém um registro por servidor:
+quem entrou, quando entrou e quando saiu. Cada entrada e saída vira uma sessão, então o painel
+mostra o histórico de sessões, a primeira e a última vez de cada jogador e a contagem de mensagens
+no chat.
+
+**Moderação** (aba **Jogadores** → perfil): expulsar, banir (com duração opcional em minutos),
+desbanir, silenciar e reativar o chat. Toda ação exige o servidor online (RCON conectado), aceita
+um motivo e fica registrada no histórico com autor e data. Banir com **sincronizar** aplica o
+mesmo ban nos outros servidores do grupo. O painel também aceita uma **nota do admin** por jogador.
+
+**Super usuário** (aba **Jogadores** → perfil → **Tornar super usuário**): concede status de owner
+no jogo via `ownerid`, o que libera o F1 e os poderes de admin, como `god` (invencibilidade),
+`noclip` e teleporte. O botão vira **Remover super usuário** (`removeowner`) quando o jogador já é
+owner, e o estado aparece como selo no perfil. O status é independente de mute e ban: um jogador
+pode estar silenciado e continuar como super usuário.
+
+**Chat** (aba **Chat**): as mensagens do jogo são capturadas do console e aparecem ao vivo, com
+filtro para ver só as sinalizadas e um campo para enviar anúncios via `say`. O **filtro de chat**
+marca mensagens que contenham palavras-chave configuradas (até 50, sem diferenciar maiúsculas) e,
+se quiser, avisa no Discord. O evento `moderation` do Discord também pode ser ativado para cada
+kick/ban/mute.
+
+Os dados ficam no SQLite do agente (`players`, `player_sessions`, `moderation`, `chat_messages`)
+e são limitados por servidor para não crescer sem controle.
 
 ## Duas formas de cadastrar um servidor
 
@@ -448,13 +485,15 @@ npm test
 
 Cobre normalização de config, roundtrip do `server.cfg`, scrypt/sessões, cliente RCON contra um
 WebSocket falso, ciclo de vida com servidor simulado, grupos e ações em lote, 2FA (TOTP),
-licenciamento (assinatura Ed25519, trial, limite de servidores e modo somente leitura) e um fluxo HTTP completo
-(setup → login → criar → iniciar → logs → parar).
+licenciamento (assinatura Ed25519, trial, limite de servidores e modo somente leitura), jogadores
+(sessões, notas, moderação e expiração de ban), chat (parsing, filtro por palavra-chave e histórico
+sinalizado) e um fluxo HTTP completo (setup → login → criar → iniciar → logs → parar).
 
 ## Roadmap
 
 - **Fase 2:** ~~alertas no Discord, backup automático, métricas históricas~~ ✔
 - **Fase 3:** ~~plugins Oxide/uMod~~ ✔, ~~multi-servidor avançado (grupos e ações em lote)~~ ✔, ~~2FA (TOTP)~~ ✔, ~~licenciamento~~ ✔
+- **Fase 4:** ~~jogadores e sessões~~ ✔, ~~moderação por RCON (kick/ban/mute)~~ ✔, ~~super usuário (owner/unowner)~~ ✔, ~~chat ao vivo e filtro por palavra-chave~~ ✔, ~~ban sincronizado entre servidores do grupo~~ ✔
 
 > Projeto independente, não afiliado à Facepunch Studios. Não redistribui binários do jogo:
 > apenas automatiza o SteamCMD.

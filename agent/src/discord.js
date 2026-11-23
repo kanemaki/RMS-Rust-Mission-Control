@@ -1,7 +1,15 @@
-export const DISCORD_EVENTS = ['online', 'offline', 'crash', 'wipe', 'backup'];
+export const DISCORD_EVENTS = ['online', 'offline', 'crash', 'wipe', 'backup', 'moderation'];
 
 const WEBHOOK_RE = /^https:\/\/(?:(?:ptb|canary)\.)?discord(?:app)?\.com\/api\/webhooks\/\d{5,25}\/[A-Za-z0-9_-]{20,120}$/;
-const COLORS = { online: 0x2ecc71, offline: 0x95a5a6, crash: 0xe74c3c, wipe: 0xf39c12, test: 0x5865f2 };
+const COLORS = {
+  online: 0x2ecc71,
+  offline: 0x95a5a6,
+  crash: 0xe74c3c,
+  wipe: 0xf39c12,
+  backup: 0x3498db,
+  moderation: 0xe67e22,
+  test: 0x5865f2,
+};
 const TIMEOUT_MS = 8000;
 
 export function isValidWebhook(url) {
@@ -12,7 +20,7 @@ export function defaultDiscord() {
   return {
     enabled: false,
     webhookUrl: '',
-    events: { online: true, offline: true, crash: true, wipe: true, backup: false },
+    events: { online: true, offline: true, crash: true, wipe: true, backup: false, moderation: true },
   };
 }
 

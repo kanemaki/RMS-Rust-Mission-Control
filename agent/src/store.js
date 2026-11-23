@@ -50,6 +50,7 @@ function defaultServer(detected = detectInstall()) {
     wipeSchedule: { enabled: false, dayOfMonth: 1, time: '04:00', type: 'map', rotateSeed: false },
     backupSchedule: { enabled: false, time: '03:00', keep: 7 },
     discord: defaultDiscord(),
+    chatFilter: { enabled: false, keywords: [], notifyDiscord: true },
     autoUpdate: false,
     autoRestart: true,
     extraArgs: [],
@@ -186,6 +187,7 @@ export function normalizeServer(input, existing = null) {
   merged.wipeSchedule = normalizeWipeSchedule(merged.wipeSchedule, merged.mode);
   merged.backupSchedule = normalizeBackupSchedule(merged.backupSchedule, merged.mode);
   merged.discord = normalizeDiscord(input.discord, existing?.discord ?? merged.discord);
+  merged.chatFilter = normalizeChatFilter(input.chatFilter, existing?.chatFilter ?? merged.chatFilter);
 
   merged.extraArgs = Array.isArray(merged.extraArgs)
     ? merged.extraArgs.map((arg) => String(arg)).filter(Boolean)
@@ -241,6 +243,30 @@ function normalizeBackupSchedule(value, mode) {
     throw new ValidationError('Backup automático está disponível apenas para servidores locais.');
   }
   return schedule;
+}
+
+export function normalizeChatFilter(value, current = null) {
+  const base = current ?? { enabled: false, keywords: [], notifyDiscord: true };
+  const input = value && typeof value === 'object' ? value : {};
+  const filter = {
+    enabled: input.enabled === undefined ? Boolean(base.enabled) : Boolean(input.enabled),
+    notifyDiscord:
+      input.notifyDiscord === undefined ? Boolean(base.notifyDiscord ?? true) : Boolean(input.notifyDiscord),
+    keywords: Array.isArray(input.keywords) ? input.keywords : Array.isArray(base.keywords) ? base.keywords : [],
+  };
+  const seen = new Set();
+  const keywords = [];
+  for (const item of filter.keywords) {
+    const keyword = String(item ?? '').trim().slice(0, 40);
+    if (!keyword) continue;
+    const key = keyword.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    keywords.push(keyword);
+    if (keywords.length >= 50) break;
+  }
+  filter.keywords = keywords;
+  return filter;
 }
 
 function normalizeDiscord(value, current) {

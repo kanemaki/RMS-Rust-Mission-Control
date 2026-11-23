@@ -42,6 +42,94 @@ export interface DiscordEvents {
   crash: boolean;
   wipe: boolean;
   backup: boolean;
+  moderation: boolean;
+}
+
+export interface ChatFilter {
+  enabled: boolean;
+  keywords: string[];
+  notifyDiscord: boolean;
+}
+
+export type PlayerAction = 'kick' | 'ban' | 'unban' | 'mute' | 'unmute' | 'owner' | 'unowner';
+
+export interface Player {
+  steamId: string;
+  name: string;
+  online: boolean;
+  onlineSince: number | null;
+  firstSeen: number;
+  lastSeen: number;
+  lastSessionAt: number | null;
+  sessionCount: number;
+  note: string;
+  muted: boolean;
+  banned: boolean;
+  banExpiresAt: number | null;
+  owner: boolean;
+  ownerSince: number | null;
+  lastAction: PlayerAction | null;
+  lastActionAt: number | null;
+}
+
+export interface PlayerSession {
+  id: number;
+  joined_at: number;
+  left_at: number | null;
+  last_seen: number;
+  name: string;
+}
+
+export interface ModerationEntry {
+  id: number;
+  ts: number;
+  serverId: string;
+  steamId: string;
+  name: string;
+  action: PlayerAction;
+  reason: string;
+  minutes: number | null;
+  expiresAt: number | null;
+  resolvedAt: number | null;
+  actor: string;
+  synced: { from: string } | null;
+}
+
+export interface PlayerDetail extends Player {
+  sessions: PlayerSession[];
+  moderation: ModerationEntry[];
+  chatCount: number;
+}
+
+export interface PlayersResponse {
+  online: Player[];
+  recent: Player[];
+  total: number;
+}
+
+export interface ChatMessage {
+  id: number;
+  ts: number;
+  serverId: string;
+  steamId: string | null;
+  username: string | null;
+  message: string;
+  channel: number | null;
+  flagged: boolean;
+  rule: string | null;
+}
+
+export interface BanSyncResult {
+  group: string | null;
+  total: number;
+  applied: number;
+  results: { id: string; name: string; ok: boolean; skipped?: boolean; error?: string }[];
+}
+
+export interface ModerationResponse {
+  response: string;
+  moderation: ModerationEntry;
+  sync: BanSyncResult | null;
 }
 
 export interface DiscordSettings {
@@ -79,6 +167,7 @@ export interface Server {
   wipeSchedule: WipeSchedule;
   backupSchedule: BackupSchedule;
   discord: DiscordSettings;
+  chatFilter: ChatFilter;
   autoUpdate: boolean;
   autoRestart: boolean;
   extraArgs: string[];
@@ -211,7 +300,8 @@ export interface BatchResponse {
 export type StreamEvent =
   | { type: 'hello'; servers: ServerStatus[] }
   | { type: 'status'; serverId: string; status: ServerStatus }
-  | { type: 'log'; serverId: string; entry: LogEntry };
+  | { type: 'log'; serverId: string; entry: LogEntry }
+  | { type: 'chat'; serverId: string; entry: ChatMessage };
 
 export interface TotpStatus {
   enabled: boolean;

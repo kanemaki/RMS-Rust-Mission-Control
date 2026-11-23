@@ -183,6 +183,16 @@ DELETE /api/servers/:id/backups/:name
 GET    /api/servers/:id/samples?limit=      last N raw samples
 GET    /api/servers/:id/samples?range=24h   aggregated series (24h, 7d or 30d)
 
+GET    /api/servers/:id/players?search=     online and recent players
+GET    /api/servers/:id/players/:steamId    profile, sessions, moderation and note
+PATCH  /api/servers/:id/players/:steamId    { note }
+POST   /api/servers/:id/players/:steamId/action  { action, reason?, minutes?, sync? }
+GET    /api/servers/:id/moderation?steamId= moderation history
+GET    /api/servers/:id/chat?flagged=1      chat history (flagged only with flagged=1)
+POST   /api/servers/:id/chat                { message } chat announcement via say
+GET    /api/servers/:id/chat-filter
+PUT    /api/servers/:id/chat-filter         { enabled, keywords, notifyDiscord }
+
 GET    /api/servers/:id/oxide               Oxide status and plugin count
 POST   /api/servers/:id/oxide/install      installs/updates Oxide (server stopped)
 GET    /api/servers/:id/oxide/plugins
@@ -193,12 +203,38 @@ PUT    /api/servers/:id/oxide/plugins/:name/config       { raw }
 POST   /api/servers/:id/oxide/plugins/:name/load|unload|reload
 
 GET    /api/audit?limit=
-GET    /api/events                   SSE (status + logs)
+GET    /api/events                   SSE (status + logs + chat)
 ```
 
 The batch endpoint (`/api/servers/batch`) runs the action in parallel and returns a per-server result
 (`results[].ok`/`error`) — one failure does not abort the others. The batch never runs the automatic
 SteamCMD update; to update, use each server's individual `update`.
+
+## Players, moderation and chat
+
+The agent polls `playerlist` over RCON at a short interval and keeps a record per server: who
+joined, when they joined and when they left. Every join and leave becomes a session, so the panel
+shows the session history, each player's first and last seen time and the chat message count.
+
+**Moderation** (tab **Players** → profile): kick, ban (with an optional duration in minutes),
+unban, mute and unmute. Every action requires the server online (RCON connected), accepts a reason
+and is recorded in the history with author and date. Banning with **sync** applies the same ban on
+the other servers in the group. The panel also accepts an **admin note** per player.
+
+**Super user** (tab **Players** → profile → **Make super user**): grants in-game owner status via
+`ownerid`, which unlocks F1 and the admin powers such as `god` (invincibility), `noclip` and
+teleport. The button becomes **Remove super user** (`removeowner`) when the player is already an
+owner, and the state shows as a badge on the profile. The status is independent from mute and ban:
+a player can be muted and still be a super user.
+
+**Chat** (tab **Chat**): in-game messages are captured from the console and shown live, with a
+filter to see only the flagged ones and a field to send announcements via `say`. The **chat
+filter** flags messages containing the configured keywords (up to 50, case-insensitive) and, if
+you want, notifies Discord. The Discord `moderation` event can also be enabled for each
+kick/ban/mute.
+
+The data lives in the agent's SQLite (`players`, `player_sessions`, `moderation`, `chat_messages`)
+and is capped per server so it does not grow without control.
 
 ## Two ways to register a server
 
@@ -451,13 +487,15 @@ npm test
 
 Covers config normalization, `server.cfg` roundtrip, scrypt/sessions, the RCON client against a fake
 WebSocket, the process lifecycle with a simulated server, groups and batch actions, 2FA (TOTP),
-licensing (Ed25519 signature, trial, server limit and read-only mode) and a full HTTP flow
+licensing (Ed25519 signature, trial, server limit and read-only mode), players (sessions, notes,
+moderation and ban expiry), chat (parsing, keyword filter and flagged history) and a full HTTP flow
 (setup → login → create → start → logs → stop).
 
 ## Roadmap
 
 - **Phase 2:** ~~Discord alerts, automatic backup, historical metrics~~ ✔
 - **Phase 3:** ~~Oxide/uMod plugins~~ ✔, ~~advanced multi-server (groups and batch actions)~~ ✔, ~~2FA (TOTP)~~ ✔, ~~licensing~~ ✔
+- **Phase 4:** ~~players and sessions~~ ✔, ~~RCON moderation (kick/ban/mute)~~ ✔, ~~super user (owner/unowner)~~ ✔, ~~live chat and keyword filter~~ ✔, ~~ban sync across group servers~~ ✔
 
 > Independent project, not affiliated with Facepunch Studios. Does not redistribute game binaries:
 > it only automates SteamCMD.

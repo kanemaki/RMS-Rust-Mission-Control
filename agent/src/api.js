@@ -11,11 +11,14 @@ import {
   removeServer,
   updateGroup,
   updateServer,
+  normalizeChatFilter,
   ValidationError,
 } from './store.js';
 import { runtimeManager } from './process-manager.js';
 import { ConflictError } from './errors.js';
 import { logBus } from './logbus.js';
+import { closeSessions, getPlayer, listModeration, listPlayers, normalizeSteamId, setPlayerNote } from './players.js';
+import { listChat } from './chat.js';
 import { readConfig, writeConfig, launchPatch, validateValues, withoutSecrets } from './cfg.js';
 import { createBackup, deleteBackup, listBackups, restoreBackup } from './backups.js';
 import { audit, listAudit, listSamples, listSamplesRange } from './db.js';
@@ -411,6 +414,113 @@ export function createApi({ secureCookies = false, version = '0.1.0' } = {}) {
     res.json(logBus.history(runtime.server.id, Number(req.query.limit) || 300));
   });
 
+  router.get('/servers/:id/players', (req, res) => {
+    const server = requireServer(req, res);
+    if (!server) return;
+    reconcileSessions(server);
+    res.json(listPlayers(server.id, { search: req.query.search, limit: req.query.limit }));
+  });
+
+  router.get('/servers/:id/players/:steamId', (req, res) => {
+    const server = requireServer(req, res);
+    if (!server) return;
+    reconcileSessions(server);
+    const steamId = normalizeSteamId(req.params.steamId);
+    const player = getPlayer(server.id, steamId);
+    if (!player) {
+      res.status(404).json({ error: 'Jogador não encontrado.' });
+      return;
+    }
+    res.json(player);
+  });
+
+  router.patch('/servers/:id/players/:steamId', (req, res) => {
+    const server = requireServer(req, res);
+    if (!server) return;
+    const steamId = normalizeSteamId(req.params.steamId);
+    const result = setPlayerNote(server.id, steamId, req.body?.note);
+    audit('player_note', { serverId: server.id, detail: steamId, ip: req.ip });
+    res.json(result);
+  });
+
+  router.get('/servers/:id/moderation', (req, res) => {
+    const server = requireServer(req, res);
+    if (!server) return;
+    const steamId = req.query.steamId ? normalizeSteamId(req.query.steamId) : null;
+    res.json(listModeration(server.id, { steamId, limit: req.query.limit }));
+  });
+
+  router.post('/servers/:id/players/:steamId/action', async (req, res) => {
+    const runtime = requireRuntime(req, res);
+    if (!runtime) return;
+    const steamId = normalizeSteamId(req.params.steamId);
+    const action = String(req.body?.action ?? '').trim().toLowerCase();
+    const player = getPlayer(runtime.server.id, steamId);
+    const name = player?.name ?? (String(req.body?.name ?? '').trim() || steamId);
+    const result = await runtime.moderate({
+      action,
+      steamId,
+      name,
+      reason: req.body?.reason,
+      minutes: req.body?.minutes,
+      actor: 'panel',
+    });
+    let sync = null;
+    if (action === 'ban' && req.body?.sync) {
+      sync = await syncBan(runtime, {
+        steamId,
+        name,
+        reason: req.body?.reason,
+        minutes: req.body?.minutes,
+      });
+    }
+    audit(`player_${action}`, {
+      serverId: runtime.server.id,
+      detail: `${name} (${steamId})${req.body?.reason ? `: ${req.body.reason}` : ''}`,
+      ip: req.ip,
+    });
+    res.json({ ...result, sync });
+  });
+
+  router.get('/servers/:id/chat', (req, res) => {
+    const server = requireServer(req, res);
+    if (!server) return;
+    res.json(listChat(server.id, { limit: req.query.limit, flagged: req.query.flagged === '1' }));
+  });
+
+  router.post('/servers/:id/chat', async (req, res) => {
+    const runtime = requireRuntime(req, res);
+    if (!runtime) return;
+    const message = String(req.body?.message ?? '')
+      .replace(/[\r\n]/g, ' ')
+      .trim();
+    if (!message) throw new ValidationError('Mensagem vazia.');
+    if (message.length > 200) throw new ValidationError('A mensagem aceita no máximo 200 caracteres.');
+    const response = await runtime.command(`say ${message}`);
+    audit('chat_say', { serverId: runtime.server.id, detail: message, ip: req.ip });
+    res.json({ response });
+  });
+
+  router.get('/servers/:id/chat-filter', (req, res) => {
+    const server = requireServer(req, res);
+    if (!server) return;
+    res.json(server.chatFilter);
+  });
+
+  router.put('/servers/:id/chat-filter', requireWritable, (req, res) => {
+    const server = requireServer(req, res);
+    if (!server) return;
+    const filter = normalizeChatFilter(req.body, server.chatFilter);
+    const updated = updateServer(server.id, { chatFilter: filter });
+    runtimeManager.sync(loadConfig().servers);
+    audit('chat_filter_update', {
+      serverId: server.id,
+      detail: `${filter.enabled ? 'on' : 'off'}: ${filter.keywords.length} palavra(s)`,
+      ip: req.ip,
+    });
+    res.json(updated?.chatFilter ?? filter);
+  });
+
   router.get('/servers/:id/config', (req, res) => {
     const server = requireServer(req, res);
     if (!server) return;
@@ -625,6 +735,16 @@ export function createApi({ secureCookies = false, version = '0.1.0' } = {}) {
   return router;
 }
 
+/**
+ * O painel só pode mostrar "online" com o servidor rodando. Se o runtime não
+ * está rodando (parado, com erro ou depois de reiniciar o agente), as sessões
+ * abertas no banco são resíduo e precisam ser fechadas antes de listar.
+ */
+function reconcileSessions(server) {
+  const runtime = runtimeManager.get(server.id);
+  if (runtime?.status().state !== 'running') closeSessions(server.id);
+}
+
 function requireServer(req, res) {
   const server = findServer(req.params.id);
   if (!server) {
@@ -641,4 +761,51 @@ function requireRuntime(req, res) {
     return null;
   }
   return runtime;
+}
+
+/**
+ * Replica um ban nos demais servidores do mesmo grupo (ou em todos os outros
+ * servidores do agente, quando o servidor de origem não tem grupo). Servidores
+ * offline são reportados como ignorados, sem derrubar a ação principal.
+ */
+async function syncBan(sourceRuntime, { steamId, name, reason, minutes }) {
+  const config = loadConfig();
+  const source = config.servers.find((server) => server.id === sourceRuntime.server.id);
+  const targets = config.servers.filter(
+    (server) => server.id !== sourceRuntime.server.id && (source?.group ? server.group === source.group : true),
+  );
+  const results = [];
+  for (const target of targets) {
+    const runtime = runtimeManager.get(target.id);
+    if (!runtime || runtime.state !== 'running' || !runtime.rcon?.connected) {
+      results.push({
+        id: target.id,
+        name: target.name,
+        ok: false,
+        skipped: true,
+        error: 'Servidor offline ou RCON desconectado.',
+      });
+      continue;
+    }
+    try {
+      await runtime.moderate({
+        action: 'ban',
+        steamId,
+        name,
+        reason,
+        minutes,
+        actor: 'sync',
+        synced: { from: sourceRuntime.server.id },
+      });
+      results.push({ id: target.id, name: target.name, ok: true });
+    } catch (error) {
+      results.push({ id: target.id, name: target.name, ok: false, error: error.message });
+    }
+  }
+  return {
+    group: source?.group ?? null,
+    total: results.length,
+    applied: results.filter((item) => item.ok).length,
+    results,
+  };
 }

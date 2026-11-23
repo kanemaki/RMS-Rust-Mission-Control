@@ -47,9 +47,67 @@ export function getDb() {
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS players (
+      server_id TEXT NOT NULL,
+      steam_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      first_seen INTEGER NOT NULL,
+      last_seen INTEGER NOT NULL,
+      last_session_at INTEGER,
+      session_count INTEGER NOT NULL DEFAULT 0,
+      note TEXT,
+      PRIMARY KEY (server_id, steam_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_players_last_seen ON players (server_id, last_seen DESC);
+    CREATE TABLE IF NOT EXISTS player_sessions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      server_id TEXT NOT NULL,
+      steam_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      joined_at INTEGER NOT NULL,
+      left_at INTEGER,
+      last_seen INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_sessions_player ON player_sessions (server_id, steam_id, joined_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_sessions_open ON player_sessions (server_id, steam_id, left_at);
+    CREATE TABLE IF NOT EXISTS moderation (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      ts INTEGER NOT NULL,
+      server_id TEXT NOT NULL,
+      steam_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      action TEXT NOT NULL,
+      reason TEXT,
+      minutes INTEGER,
+      expires_at INTEGER,
+      resolved_at INTEGER,
+      actor TEXT,
+      synced TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_moderation_player ON moderation (server_id, steam_id, ts DESC);
+    CREATE INDEX IF NOT EXISTS idx_moderation_expires ON moderation (server_id, expires_at);
+    CREATE TABLE IF NOT EXISTS chat_messages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      ts INTEGER NOT NULL,
+      server_id TEXT NOT NULL,
+      steam_id TEXT,
+      username TEXT,
+      message TEXT NOT NULL,
+      channel INTEGER,
+      flagged INTEGER NOT NULL DEFAULT 0,
+      rule TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_chat_server_ts ON chat_messages (server_id, ts DESC);
   `);
   migrateSamples(db);
+  migrateModeration(db);
   return db;
+}
+
+function migrateModeration(db) {
+  const columns = new Set(db.prepare('PRAGMA table_info(moderation)').all().map((column) => column.name));
+  if (!columns.has('resolved_at')) db.exec('ALTER TABLE moderation ADD COLUMN resolved_at INTEGER;');
+  if (!columns.has('synced')) db.exec('ALTER TABLE moderation ADD COLUMN synced TEXT;');
 }
 
 function migrateSamples(db) {
