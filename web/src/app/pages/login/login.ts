@@ -62,6 +62,18 @@ import { TPipe } from '../../shared/t.pipe';
           <p class="muted">{{ 'auth.login.subtitle' | t }}</p>
 
           <div class="field">
+            <label for="username">{{ 'auth.login.username' | t }}</label>
+            <input
+              id="username"
+              name="username"
+              type="text"
+              autocomplete="username"
+              [(ngModel)]="username"
+              required
+            />
+          </div>
+
+          <div class="field">
             <label for="password">{{ 'auth.login.password' | t }}</label>
             <input
               id="password"
@@ -78,7 +90,7 @@ import { TPipe } from '../../shared/t.pipe';
             <div class="error-box">{{ auth.error() }}</div>
           }
 
-          <button class="btn primary" type="submit" [disabled]="auth.busy() || !password">
+          <button class="btn primary" type="submit" [disabled]="auth.busy() || !password || !username">
             @if (auth.busy()) {
               <span class="spinner"></span>
             }
@@ -91,12 +103,13 @@ import { TPipe } from '../../shared/t.pipe';
 })
 export class LoginPage {
   readonly auth = inject(AuthService);
+  username = 'owner';
   password = '';
   code = '';
 
   submit(): void {
-    if (!this.password || this.auth.busy()) return;
-    void this.auth.login(this.password).then((result) => {
+    if (!this.username || !this.password || this.auth.busy()) return;
+    void this.auth.login(this.username.trim(), this.password).then((result) => {
       if (result !== 'error') this.password = '';
       if (result === 'totp') this.code = '';
     });

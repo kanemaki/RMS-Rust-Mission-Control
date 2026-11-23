@@ -133,20 +133,28 @@ Plugin names are validated against path traversal, and downloads have a size lim
 ## API
 
 All routes require a session, except `GET /api/health`, `GET /api/setup` and `POST /api/setup`.
-Mutations require the `x-rmc-request: 1` header (CSRF protection).
+Mutations require the `x-rmc-request: 1` header (CSRF protection). The `viewer` role only performs
+`GET`; `admin` operates servers, players, automation and backups; `owner` also manages users and the license.
 
 ```
 GET    /api/health
 GET    /api/setup
-POST   /api/setup                    { password }
-POST   /api/auth/login               { password } → session or 2FA challenge
+POST   /api/setup                    { password } creates the owner
+POST   /api/auth/login               { username?, password } → session or 2FA challenge
 POST   /api/auth/login/totp          { challenge, code } → session
 POST   /api/auth/logout
-GET    /api/auth/me                  includes totpEnabled
+GET    /api/auth/me                  id, username, role and totpEnabled
 GET    /api/auth/totp                2FA status and remaining codes
 POST   /api/auth/totp/setup          secret + otpauth + QR (data URL)
 POST   /api/auth/totp/enable         { code } → recovery codes
 POST   /api/auth/totp/disable        { password, code }
+
+GET    /api/users                    owner: list without hash, salt or secret
+POST   /api/users                    owner: { username, password, role }
+PATCH  /api/users/:id                owner: { role?, disabled? }
+POST   /api/users/:id/password       owner: { password } (closes their sessions)
+POST   /api/users/:id/totp/reset     owner: resets the member's 2FA
+DELETE /api/users/:id                owner: deletes (cannot be your own account)
 
 GET    /api/license                  license state (trial, valid, expired, invalid)
 POST   /api/license                  { text } applies the signed JSON
@@ -343,15 +351,17 @@ Variables: `RMC_PORT` (default 8090), `RMC_HOST` (default 127.0.0.1), `RMC_DATA_
 
 ## Security
 
-- Dashboard password with scrypt + salt; opaque sessions with SHA-256 hash in the database
-- `HttpOnly` cookie, `SameSite=Lax`, 30-day expiry
+- Per-user password with scrypt + salt; opaque sessions with SHA-256 hash in the database, bound to the user
+- Three roles: `owner` (everything, including users and license), `admin` (servers, players, automation,
+  backups) and `viewer` (read-only); every mutation route is checked by role
+- `HttpOnly` cookie, `SameSite=Lax`, 30-day expiry; disabling a user or changing their password closes their sessions
 - Login rate limit: 8 attempts per 15 minutes per IP
-- **2FA (TOTP)** optional: 6-digit code every 30 seconds, ±1 step tolerance,
+- **2FA (TOTP) per user**, optional: 6-digit code every 30 seconds, ±1 step tolerance,
   10 single-use recovery codes (stored hashed) and a login challenge valid for 5 minutes
 - RCON listens on `127.0.0.1` and the password is never returned by the API
 - Processes started with an argument array (no shell), avoiding injection
 - CSP, `X-Frame-Options: DENY`, `nosniff` and `no-referrer`
-- Audit of logins, RCON commands, config, backups and lifecycle
+- Audit of logins, RCON commands, config, backups and lifecycle, with the `actor` of each action
 
 ### Disabling 2FA
 
@@ -363,29 +373,45 @@ The route is `POST /api/auth/totp/disable { password, code }`. Disabling wipes t
 pending secret and the 10 recovery codes; enabling again later generates a **new secret and 10 new
 codes** (the old ones never come back). The audit history (`totp_enabled` / `totp_disabled`) is kept.
 
-**Emergency exit (lost the phone and the recovery codes):** stop the service, edit
-`agent/data/config.json` and set the `auth.totp` block as below, then start the service again:
+**Emergency exit (lost the phone and the recovery codes):** another `owner` signs in, opens
+**Users** and clicks **Reset 2FA** on that member — the secret, the pending secret and the recovery
+codes are wiped and the audit records `user_totp_reset`. If the affected account is the only owner,
+stop the service and clear the `totp` column of that row in `agent/data/rmc.db`:
 
-```json
-"totp": {
-  "enabled": false,
-  "secret": null,
-  "pendingSecret": null,
-  "recoveryCodes": [],
-  "enabledAt": null
-}
+```sql
+UPDATE users SET totp = '{"enabled":false,"secret":null,"pendingSecret":null,"recoveryCodes":[],"enabledAt":null}' WHERE username_key = 'owner';
 ```
 
 That is physical access to the file — which is why the `agent/data` folder must not go into a
 repository or a public backup.
 
-> **Per user, not yet.** The dashboard currently has a single credential (one `auth.passwordHash`
-> and one `auth.totp` in `config.json`), so disabling applies to the whole dashboard. Per-user 2FA,
-> with the Owner able to reset a specific member's, arrives in **Phase 7 (multi-user with roles)**.
+> **Migrated automatically.** On boot, an old `auth.passwordHash`/`auth.salt` in `config.json`
+> becomes the `owner` user with the same password (and the same 2FA, if it was enabled), so the
+> existing login keeps working without reconfiguration. The legacy block is left untouched but is
+> no longer read.
 
 Known limitations: the RCON password is stored in plain text in `config.json`
 (protect the `agent/data` folder); the dashboard should not be exposed directly to the internet
 without HTTPS.
+
+## Users and roles
+
+The dashboard no longer has a single credential: everyone signs in with their own username, password
+and 2FA, and the role defines the reach of each action.
+
+| Role | Can |
+|---|---|
+| `owner` | everything: servers, players, automation, backups, users and license |
+| `admin` | servers, players, automation and backups; **not** users or license |
+| `viewer` | read-only: status, console, metrics, intelligence, backups and history |
+
+- The **Users** screen (owner only) creates, changes role, disables, resets the password, resets 2FA and deletes
+- The `owner` cannot demote, disable or delete their own account, and the dashboard never runs without an
+  active owner
+- Disabling a user or changing their password closes their sessions immediately; a session is also refused
+  if the user was disabled elsewhere
+- Minimum password of 10 characters, unique username case-insensitive
+- The audit records the `actor` of every action (login, moderation, config, backups, users)
 
 ## License (offline, signed)
 
@@ -531,7 +557,9 @@ moderation and ban expiry), chat (parsing, keyword filter and flagged history) a
 (setup → login → create → start → logs → stop). Automated operation covers the time calculations,
 the restart/update/announcement normalization, the remote-mode validation and the immediate
 announcement with rotation against a fake RCON. Player intelligence covers playtime, the heatmap by
-local hour, ranking, retention, inactive players and CSV export.
+local hour, ranking, retention, inactive players and CSV export. Multi-user covers the migration of
+the legacy credential, user creation and roles, the last-owner protections, closing sessions when a
+user is disabled or their password changes, per-user 2FA and the audit actor.
 
 ## Roadmap
 
@@ -540,6 +568,7 @@ local hour, ranking, retention, inactive players and CSV export.
 - **Phase 4:** ~~players and sessions~~ ✔, ~~RCON moderation (kick/ban/mute)~~ ✔, ~~super user (owner/unowner)~~ ✔, ~~live chat and keyword filter~~ ✔, ~~ban sync across group servers~~ ✔
 - **Phase 5:** ~~scheduled restart with warnings~~ ✔, ~~scheduled update~~ ✔, ~~recurring announcements with rotation~~ ✔
 - **Phase 6:** ~~playtime and activity heatmap~~ ✔, ~~ranking and retention~~ ✔, ~~enriched player profile~~ ✔, ~~new/inactive/peak player alerts~~ ✔, ~~CSV export~~ ✔
+- **Phase 7:** ~~users in SQLite with per-user scrypt~~ ✔, ~~owner/admin/viewer roles~~ ✔, ~~session bound to the user~~ ✔, ~~per-user 2FA with owner reset~~ ✔, ~~users screen~~ ✔, ~~audit with actor~~ ✔, ~~legacy credential migration~~ ✔
 
 > Independent project, not affiliated with Facepunch Studios. Does not redistribute game binaries:
 > it only automates SteamCMD.

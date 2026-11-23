@@ -5,6 +5,10 @@
 
   <a class="back" routerLink="/">{{ 'server.back' | t }}</a>
 
+  @if (!auth.canWrite()) {
+    <div class="readonly-banner">{{ 'users.readonlyBanner' | t }}</div>
+  }
+
   <header class="server-head">
     <div class="title">
       <h1>{{ s.name }}</h1>

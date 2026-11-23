@@ -130,20 +130,28 @@ Nomes de plugin são validados contra travessia de caminho, e downloads têm lim
 ## API
 
 Todas as rotas exigem sessão, exceto `GET /api/health`, `GET /api/setup` e `POST /api/setup`.
-Mutações exigem o cabeçalho `x-rmc-request: 1` (proteção CSRF).
+Mutações exigem o cabeçalho `x-rmc-request: 1` (proteção CSRF). O papel `viewer` só faz `GET`;
+`admin` opera servidores, jogadores, automação e backups; `owner` também gerencia usuários e licença.
 
 ```
 GET    /api/health
 GET    /api/setup
-POST   /api/setup                    { password }
-POST   /api/auth/login               { password } → sessão ou desafio 2FA
+POST   /api/setup                    { password } cria o proprietário
+POST   /api/auth/login               { username?, password } → sessão ou desafio 2FA
 POST   /api/auth/login/totp          { challenge, code } → sessão
 POST   /api/auth/logout
-GET    /api/auth/me                  inclui totpEnabled
+GET    /api/auth/me                  id, username, role e totpEnabled
 GET    /api/auth/totp                status do 2FA e códigos restantes
 POST   /api/auth/totp/setup          segredo + otpauth + QR (data URL)
 POST   /api/auth/totp/enable         { code } → códigos de recuperação
 POST   /api/auth/totp/disable        { password, code }
+
+GET    /api/users                    owner: lista sem hash, salt ou segredo
+POST   /api/users                    owner: { username, password, role }
+PATCH  /api/users/:id                owner: { role?, disabled? }
+POST   /api/users/:id/password       owner: { password } (derruba as sessões)
+POST   /api/users/:id/totp/reset     owner: reseta o 2FA do membro
+DELETE /api/users/:id                owner: exclui (não pode ser a própria conta)
 
 GET    /api/license                  estado da licença (trial, valid, expired, invalid)
 POST   /api/license                  { text } aplica o JSON assinado
@@ -340,15 +348,17 @@ Variáveis: `RMC_PORT` (padrão 8090), `RMC_HOST` (padrão 127.0.0.1), `RMC_DATA
 
 ## Segurança
 
-- Senha do painel com scrypt + salt; sessões opacas com hash SHA-256 no banco
-- Cookie `HttpOnly`, `SameSite=Lax`, expiração de 30 dias
+- Senha por usuário com scrypt + salt; sessões opacas com hash SHA-256 no banco, vinculadas ao usuário
+- Três papéis: `owner` (tudo, inclusive usuários e licença), `admin` (servidores, jogadores, automação,
+  backups) e `viewer` (somente leitura); toda rota de mutação é checada por papel
+- Cookie `HttpOnly`, `SameSite=Lax`, expiração de 30 dias; desativar um usuário ou trocar a senha derruba as sessões dele
 - Rate limit de login: 8 tentativas por 15 minutos por IP
-- **2FA (TOTP)** opcional: código de 6 dígitos a cada 30 segundos, tolerância de ±1 passo,
+- **2FA (TOTP) por usuário**, opcional: código de 6 dígitos a cada 30 segundos, tolerância de ±1 passo,
   10 códigos de recuperação de uso único (guardados com hash) e desafio de login válido por 5 minutos
 - RCON escuta em `127.0.0.1` e a senha nunca é devolvida pela API
 - Processos iniciados com array de argumentos (sem shell), evitando injeção
 - CSP, `X-Frame-Options: DENY`, `nosniff` e `no-referrer`
-- Auditoria de login, comandos RCON, config, backups e ciclo de vida
+- Auditoria de login, comandos RCON, config, backups e ciclo de vida, com o `actor` de cada ação
 
 ### Desativar o 2FA
 
@@ -361,28 +371,43 @@ pendente e os 10 códigos de recuperação são apagados; se ativar de novo depo
 **segredo novo e 10 códigos novos** (os antigos não voltam). O histórico de auditoria
 (`totp_enabled` / `totp_disabled`) permanece.
 
-**Saída de emergência (perdeu o celular e os códigos de recuperação):** pare o serviço, edite
-`agent/data/config.json` e deixe o bloco `auth.totp` assim, depois suba o serviço de novo:
+**Saída de emergência (perdeu o celular e os códigos de recuperação):** outro `owner` entra, abre
+**Usuários** e clica em **Resetar 2FA** naquele membro — o segredo, o segredo pendente e os códigos
+de recuperação são apagados e a auditoria registra `user_totp_reset`. Se a conta afetada for o único
+proprietário, pare o serviço e limpe a coluna `totp` daquela linha em `agent/data/rmc.db`:
 
-```json
-"totp": {
-  "enabled": false,
-  "secret": null,
-  "pendingSecret": null,
-  "recoveryCodes": [],
-  "enabledAt": null
-}
+```sql
+UPDATE users SET totp = '{"enabled":false,"secret":null,"pendingSecret":null,"recoveryCodes":[],"enabledAt":null}' WHERE username_key = 'owner';
 ```
 
 Isso é acesso físico ao arquivo — por isso a pasta `agent/data` não deve ir para repositório
 nem para backup público.
 
-> **Por usuário, ainda não.** Hoje o painel tem uma credencial só (um `auth.passwordHash` e um
-> `auth.totp` no `config.json`), então desativar vale para o painel inteiro. O 2FA por usuário,
-> com o Owner podendo resetar o de um membro específico, entra na **Fase 7 (multi-usuário com papéis)**.
+> **Migração automática.** No boot, um `auth.passwordHash`/`auth.salt` antigo no `config.json`
+> vira o usuário `owner` com a mesma senha (e o mesmo 2FA, se estava ativo), então o login atual
+> continua funcionando sem reconfiguração. O bloco legado fica no arquivo, mas não é mais lido.
 
 Limitações conhecidas: a senha do RCON fica em texto no `config.json`
 (proteja a pasta `agent/data`); o painel não deve ser exposto diretamente na internet sem HTTPS.
+
+## Usuários e papéis
+
+O painel deixou de ter uma credencial única: cada pessoa entra com o próprio usuário, senha e 2FA,
+e o papel define o alcance das ações.
+
+| Papel | Pode |
+|---|---|
+| `owner` | tudo: servidores, jogadores, automação, backups, usuários e licença |
+| `admin` | servidores, jogadores, automação e backups; **não** gerencia usuários nem licença |
+| `viewer` | somente leitura: status, console, métricas, inteligência, backups e histórico |
+
+- A tela **Usuários** (só para `owner`) cria, troca papel, desativa, redefine senha, reseta o 2FA e exclui
+- O `owner` não consegue se rebaixar, se desativar nem excluir a própria conta, e o painel nunca fica sem
+  um proprietário ativo
+- Desativar um usuário ou trocar a senha encerra as sessões dele na hora; a sessão também é recusada se o
+  usuário for desativado em outro lugar
+- Senha mínima de 10 caracteres, usuário único sem diferenciar maiúsculas de minúsculas
+- A auditoria grava o `actor` de cada ação (login, moderação, config, backups, usuários)
 
 ## Licença (offline, assinada)
 
@@ -529,7 +554,10 @@ licenciamento (assinatura Ed25519, trial, limite de servidores e modo somente le
 sinalizado) e um fluxo HTTP completo (setup → login → criar → iniciar → logs → parar). A operação
 automática cobre os cálculos de horário, a normalização de reinício/atualização/anúncios, a
 validação de modo remoto e o anúncio imediato com rotação contra um RCON falso. A inteligência de
-jogadores cobre tempo de jogo, heatmap por hora local, ranking, retenção, inativos e CSV.
+jogadores cobre tempo de jogo, heatmap por hora local, ranking, retenção, inativos e CSV. O
+multi-usuário cobre a migração da credencial antiga, criação e papéis, as proteções do último
+proprietário, o fechamento de sessões ao desativar ou trocar a senha, o 2FA por usuário e o autor
+na auditoria.
 
 ## Roadmap
 
@@ -538,6 +566,7 @@ jogadores cobre tempo de jogo, heatmap por hora local, ranking, retenção, inat
 - **Fase 4:** ~~jogadores e sessões~~ ✔, ~~moderação por RCON (kick/ban/mute)~~ ✔, ~~super usuário (owner/unowner)~~ ✔, ~~chat ao vivo e filtro por palavra-chave~~ ✔, ~~ban sincronizado entre servidores do grupo~~ ✔
 - **Fase 5:** ~~reinício agendado com avisos~~ ✔, ~~atualização agendada~~ ✔, ~~anúncios recorrentes com rotação~~ ✔
 - **Fase 6:** ~~tempo de jogo e heatmap de atividade~~ ✔, ~~ranking e retenção~~ ✔, ~~perfil enriquecido~~ ✔, ~~alertas de jogador novo/inativo/pico~~ ✔, ~~exportação CSV~~ ✔
+- **Fase 7:** ~~usuários no SQLite com scrypt por usuário~~ ✔, ~~papéis owner/admin/viewer~~ ✔, ~~sessão vinculada ao usuário~~ ✔, ~~2FA por usuário com reset pelo owner~~ ✔, ~~tela de usuários~~ ✔, ~~auditoria com autor~~ ✔, ~~migração da credencial antiga~~ ✔
 
 > Projeto independente, não afiliado à Facepunch Studios. Não redistribui binários do jogo:
 > apenas automatiza o SteamCMD.

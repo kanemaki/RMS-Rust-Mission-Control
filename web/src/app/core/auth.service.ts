@@ -1,6 +1,7 @@
-import { Injectable, inject, signal } from '@angular/core';
+import { Injectable, computed, inject, signal } from '@angular/core';
 import { firstValueFrom } from 'rxjs';
 import { ApiService } from './api.service';
+import { Me, Role } from './models';
 
 export type AuthState = 'loading' | 'setup' | 'login' | 'totp' | 'ready';
 export type LoginResult = 'ok' | 'totp' | 'error';
@@ -13,10 +14,17 @@ export class AuthService {
   readonly busy = signal(false);
   readonly challenge = signal<string | null>(null);
   readonly recoveryMode = signal(false);
+  readonly me = signal<Me | null>(null);
+  readonly role = computed<Role | null>(() => this.me()?.role ?? null);
+  readonly canWrite = computed(() => this.role() === 'owner' || this.role() === 'admin');
+  readonly isOwner = computed(() => this.role() === 'owner');
 
   constructor() {
     window.addEventListener('rmc:unauthorized', () => {
-      if (this.state() === 'ready') this.state.set('login');
+      if (this.state() === 'ready') {
+        this.me.set(null);
+        this.state.set('login');
+      }
     });
   }
 
@@ -28,24 +36,26 @@ export class AuthService {
         this.state.set('setup');
         return;
       }
-      await firstValueFrom(this.api.me());
+      this.me.set(await firstValueFrom(this.api.me()));
       this.state.set('ready');
     } catch {
+      this.me.set(null);
       this.state.set('login');
     }
   }
 
-  async login(password: string): Promise<LoginResult> {
+  async login(username: string, password: string): Promise<LoginResult> {
     this.busy.set(true);
     this.error.set(null);
     try {
-      const res = await firstValueFrom(this.api.login(password));
+      const res = await firstValueFrom(this.api.login(username, password));
       if (res.totpRequired && res.challenge) {
         this.challenge.set(res.challenge);
         this.recoveryMode.set(false);
         this.state.set('totp');
         return 'totp';
       }
+      this.me.set(await firstValueFrom(this.api.me()));
       this.state.set('ready');
       return 'ok';
     } catch (err: unknown) {
@@ -68,6 +78,7 @@ export class AuthService {
       await firstValueFrom(this.api.loginTotp(challenge, code));
       this.challenge.set(null);
       this.recoveryMode.set(false);
+      this.me.set(await firstValueFrom(this.api.me()));
       this.state.set('ready');
       return true;
     } catch (err: unknown) {
@@ -90,6 +101,7 @@ export class AuthService {
     this.error.set(null);
     try {
       await firstValueFrom(this.api.setup(password));
+      this.me.set(await firstValueFrom(this.api.me()));
       this.state.set('ready');
       return true;
     } catch (err: unknown) {
@@ -108,6 +120,7 @@ export class AuthService {
     }
     this.challenge.set(null);
     this.recoveryMode.set(false);
+    this.me.set(null);
     this.state.set('login');
   }
 }

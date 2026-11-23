@@ -22,7 +22,18 @@ import { playerStats, playersCsv, serverInsights, sessionsCsv } from './insights
 import { listChat } from './chat.js';
 import { readConfig, writeConfig, launchPatch, validateValues, withoutSecrets } from './cfg.js';
 import { createBackup, deleteBackup, listBackups, restoreBackup } from './backups.js';
-import { audit, listAudit, listSamples, listSamplesRange } from './db.js';
+import { audit, auditContext, listAudit, listSamples, listSamplesRange } from './db.js';
+import {
+  createUser,
+  deleteUser,
+  findUserByUsername,
+  getUser,
+  listUsers,
+  resetUserTotp,
+  setUserPassword,
+  updateUser,
+  verifyUserPassword,
+} from './users.js';
 import { applyLicense, assertServerLimit, licenseStatus, removeLicense } from './license.js';
 import { sendDiscord } from './discord.js';
 import { scanInstall } from './discover.js';
@@ -42,6 +53,13 @@ import {
 const SAMPLE_RANGES = { '24h': 24, '7d': 24 * 7, '30d': 24 * 30 };
 const MAX_POINTS = 400;
 const BATCH_ACTIONS = ['start', 'stop', 'restart', 'backup'];
+
+/** Usuário sem hash, salt nem segredo de 2FA. */
+function publicUser(user) {
+  if (!user) return null;
+  const { passwordHash, salt, totp, ...rest } = user;
+  return { ...rest, totpEnabled: Boolean(totp?.enabled && totp?.secret) };
+}
 import {
   beginTotpSetup,
   clearCookie,
@@ -55,6 +73,7 @@ import {
   needsSetup,
   readPendingChallenge,
   requireAuth,
+  requireRole,
   resetLoginAttempts,
   resetTotpAttempts,
   sessionCookie,
@@ -84,38 +103,42 @@ export function createApi({ secureCookies = false, version = '0.1.0' } = {}) {
       return;
     }
     setPassword(req.body?.password);
-    const { token } = createSession({ ip: req.ip, userAgent: req.get('user-agent') });
+    const owner = findUserByUsername('owner');
+    const { token } = createSession({ ip: req.ip, userAgent: req.get('user-agent'), userId: owner.id });
     res.setHeader('Set-Cookie', sessionCookie(token, { secure: secureCookies }));
-    audit('setup', { ip: req.ip });
+    audit('setup', { ip: req.ip, actor: owner.username });
     res.json({ ok: true });
   });
 
   router.post('/auth/login', loginRateLimit, (req, res) => {
-    if (!verifyPassword(req.body?.password)) {
-      audit('login_failed', { ip: req.ip });
-      res.status(401).json({ error: 'Senha incorreta.' });
+    const username = String(req.body?.username ?? 'owner').trim() || 'owner';
+    const user = findUserByUsername(username);
+    if (!user || user.disabled || !verifyUserPassword(user, req.body?.password)) {
+      audit('login_failed', { ip: req.ip, detail: username });
+      res.status(401).json({ error: 'Usuário ou senha incorretos.' });
       return;
     }
     resetLoginAttempts(req.ip);
-    if (totpEnabled()) {
-      const challenge = createPendingChallenge({ ip: req.ip, userAgent: req.get('user-agent') });
-      audit('login_totp_challenge', { ip: req.ip });
+    if (user.totpEnabled) {
+      const challenge = createPendingChallenge({ ip: req.ip, userAgent: req.get('user-agent'), userId: user.id });
+      audit('login_totp_challenge', { ip: req.ip, actor: user.username });
       res.json({ ok: true, totpRequired: true, challenge: challenge.token, expiresAt: challenge.expiresAt });
       return;
     }
-    const { token } = createSession({ ip: req.ip, userAgent: req.get('user-agent') });
+    const { token } = createSession({ ip: req.ip, userAgent: req.get('user-agent'), userId: user.id });
     res.setHeader('Set-Cookie', sessionCookie(token, { secure: secureCookies }));
-    audit('login', { ip: req.ip });
+    audit('login', { ip: req.ip, actor: user.username });
     res.json({ ok: true });
   });
 
   router.post('/auth/login/totp', totpRateLimit, (req, res) => {
     const challenge = String(req.body?.challenge ?? '');
-    if (!readPendingChallenge(challenge)) {
+    const pending = readPendingChallenge(challenge);
+    if (!pending) {
       res.status(401).json({ error: 'Desafio expirado. Entre novamente com a senha.' });
       return;
     }
-    const result = verifySecondFactor(req.body?.code);
+    const result = verifySecondFactor(req.body?.code, pending.userId);
     if (!result.ok) {
       audit('totp_failed', { ip: req.ip });
       res.status(401).json({ error: 'Código inválido.' });
@@ -123,7 +146,7 @@ export function createApi({ secureCookies = false, version = '0.1.0' } = {}) {
     }
     destroyPendingChallenge(challenge);
     resetTotpAttempts(req.ip);
-    const { token } = createSession({ ip: req.ip, userAgent: req.get('user-agent') });
+    const { token } = createSession({ ip: req.ip, userAgent: req.get('user-agent'), userId: pending.userId });
     res.setHeader('Set-Cookie', sessionCookie(token, { secure: secureCookies }));
     audit(result.recovery ? 'login_recovery_code' : 'login_totp', { ip: req.ip });
     res.json({ ok: true, recovery: result.recovery });
@@ -136,10 +159,20 @@ export function createApi({ secureCookies = false, version = '0.1.0' } = {}) {
   });
 
   router.get('/auth/me', requireAuth, (req, res) => {
-    res.json({ authenticated: true, expiresAt: req.session.expiresAt, totpEnabled: totpEnabled() });
+    res.json({
+      authenticated: true,
+      id: req.session.userId,
+      username: req.session.username,
+      role: req.session.role,
+      expiresAt: req.session.expiresAt,
+      totpEnabled: totpEnabled(req.session.userId),
+    });
   });
 
   router.use(requireAuth);
+
+  // Toda a requisição autenticada roda com o autor no contexto de auditoria.
+  router.use((req, res, next) => auditContext.run({ actor: req.session.username }, next));
 
   // Licença offline: o painel lê o estado e aceita o JSON assinado colado pelo
   // cliente. Nada aqui faz chamada de rede.
@@ -147,7 +180,7 @@ export function createApi({ secureCookies = false, version = '0.1.0' } = {}) {
     res.json(licenseStatus());
   });
 
-  router.post('/license', (req, res) => {
+  router.post('/license', requireRole('owner'), (req, res) => {
     try {
       const status = applyLicense(req.body?.text);
       audit('license_applied', { detail: status.licenseId ?? status.state, ip: req.ip });
@@ -158,7 +191,7 @@ export function createApi({ secureCookies = false, version = '0.1.0' } = {}) {
     }
   });
 
-  router.delete('/license', (req, res) => {
+  router.delete('/license', requireRole('owner'), (req, res) => {
     const removed = removeLicense();
     audit('license_removed', { detail: removed ? 'removed' : 'absent', ip: req.ip });
     res.json({ ok: true, removed, license: licenseStatus() });
@@ -179,30 +212,86 @@ export function createApi({ secureCookies = false, version = '0.1.0' } = {}) {
   };
 
   router.get('/auth/totp', (req, res) => {
-    const { totp } = loadConfig().auth;
+    const user = getUser(req.session.userId);
+    const totp = user?.totp ?? {};
     res.json({
-      enabled: Boolean(totp?.enabled),
-      enabledAt: totp?.enabledAt ?? null,
-      recoveryCodesLeft: Array.isArray(totp?.recoveryCodes) ? totp.recoveryCodes.length : 0,
+      enabled: Boolean(totp.enabled),
+      enabledAt: totp.enabledAt ?? null,
+      recoveryCodesLeft: Array.isArray(totp.recoveryCodes) ? totp.recoveryCodes.length : 0,
     });
   });
 
   router.post('/auth/totp/setup', async (req, res) => {
-    const { secret, otpauth } = beginTotpSetup({ account: 'painel' });
+    const { secret, otpauth } = beginTotpSetup({ account: 'painel', userId: req.session.userId });
     const qr = await QRCode.toDataURL(otpauth, { margin: 1, width: 240 });
     audit('totp_setup_start', { ip: req.ip });
     res.json({ secret, otpauth, qr });
   });
 
   router.post('/auth/totp/enable', (req, res) => {
-    const { recoveryCodes } = confirmTotpSetup(req.body?.code);
+    const { recoveryCodes } = confirmTotpSetup(req.body?.code, req.session.userId);
     audit('totp_enabled', { ip: req.ip });
     res.json({ ok: true, recoveryCodes });
   });
 
   router.post('/auth/totp/disable', (req, res) => {
-    disableTotp({ password: req.body?.password, code: req.body?.code });
+    disableTotp({ password: req.body?.password, code: req.body?.code }, req.session.userId);
     audit('totp_disabled', { ip: req.ip });
+    res.json({ ok: true });
+  });
+
+  // Somente leitura: viewer pode consultar tudo, mas não muta nada.
+  router.use((req, res, next) => {
+    if (req.method === 'GET' || req.method === 'HEAD' || req.session.role !== 'viewer') {
+      next();
+      return;
+    }
+    res.status(403).json({ error: 'Seu papel é somente leitura.', role: req.session.role });
+  });
+
+  // Gestão de usuários: exclusiva do proprietário.
+  router.get('/users', requireRole('owner'), (req, res) => {
+    res.json(listUsers().map(publicUser));
+  });
+
+  router.post('/users', requireRole('owner'), (req, res) => {
+    const user = createUser(req.body ?? {});
+    audit('user_create', { detail: `${user.username} (${user.role})`, ip: req.ip });
+    res.status(201).json(publicUser(user));
+  });
+
+  router.patch('/users/:id', requireRole('owner'), (req, res) => {
+    const id = Number(req.params.id);
+    if (id === req.session.userId && (req.body?.role !== undefined || req.body?.disabled !== undefined)) {
+      res.status(400).json({ error: 'Você não pode alterar o próprio papel ou desativar a si mesmo.' });
+      return;
+    }
+    const user = updateUser(id, req.body ?? {});
+    audit('user_update', { detail: `${user.username} (${user.role}${user.disabled ? ', desativado' : ''})`, ip: req.ip });
+    res.json(publicUser(user));
+  });
+
+  router.post('/users/:id/password', requireRole('owner'), (req, res) => {
+    const user = setUserPassword(Number(req.params.id), req.body?.password);
+    audit('user_password_reset', { detail: user.username, ip: req.ip });
+    res.json({ ok: true });
+  });
+
+  router.post('/users/:id/totp/reset', requireRole('owner'), (req, res) => {
+    const user = resetUserTotp(Number(req.params.id));
+    audit('user_totp_reset', { detail: user.username, ip: req.ip });
+    res.json(publicUser(user));
+  });
+
+  router.delete('/users/:id', requireRole('owner'), (req, res) => {
+    const id = Number(req.params.id);
+    if (id === req.session.userId) {
+      res.status(400).json({ error: 'Você não pode excluir a própria conta.' });
+      return;
+    }
+    const user = getUser(id);
+    deleteUser(id);
+    audit('user_delete', { detail: user?.username ?? String(id), ip: req.ip });
     res.json({ ok: true });
   });
 

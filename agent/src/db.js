@@ -1,8 +1,12 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { DatabaseSync } from 'node:sqlite';
 import { dbFile, ensureDirs } from './paths.js';
 import { ValidationError } from './errors.js';
 
 let db = null;
+
+/** Quem está executando a requisição atual, para preencher audit.actor. */
+export const auditContext = new AsyncLocalStorage();
 
 export function getDb() {
   if (db) return db;
@@ -15,7 +19,20 @@ export function getDb() {
       created_at INTEGER NOT NULL,
       expires_at INTEGER NOT NULL,
       ip TEXT,
-      user_agent TEXT
+      user_agent TEXT,
+      user_id INTEGER
+    );
+    CREATE TABLE IF NOT EXISTS users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      username TEXT NOT NULL,
+      username_key TEXT NOT NULL UNIQUE,
+      password_hash TEXT NOT NULL,
+      salt TEXT NOT NULL,
+      role TEXT NOT NULL DEFAULT 'viewer',
+      disabled INTEGER NOT NULL DEFAULT 0,
+      totp TEXT,
+      created_at INTEGER NOT NULL,
+      last_login_at INTEGER
     );
     CREATE TABLE IF NOT EXISTS audit (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -23,7 +40,8 @@ export function getDb() {
       action TEXT NOT NULL,
       server_id TEXT,
       detail TEXT,
-      ip TEXT
+      ip TEXT,
+      actor TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit (ts DESC);
     CREATE TABLE IF NOT EXISTS pending_2fa (
@@ -31,7 +49,8 @@ export function getDb() {
       created_at INTEGER NOT NULL,
       expires_at INTEGER NOT NULL,
       ip TEXT,
-      user_agent TEXT
+      user_agent TEXT,
+      user_id INTEGER
     );
     CREATE TABLE IF NOT EXISTS samples (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -101,7 +120,17 @@ export function getDb() {
   `);
   migrateSamples(db);
   migrateModeration(db);
+  migrateAuth(db);
   return db;
+}
+
+function migrateAuth(db) {
+  const sessionColumns = new Set(db.prepare('PRAGMA table_info(sessions)').all().map((column) => column.name));
+  if (!sessionColumns.has('user_id')) db.exec('ALTER TABLE sessions ADD COLUMN user_id INTEGER;');
+  const pendingColumns = new Set(db.prepare('PRAGMA table_info(pending_2fa)').all().map((column) => column.name));
+  if (!pendingColumns.has('user_id')) db.exec('ALTER TABLE pending_2fa ADD COLUMN user_id INTEGER;');
+  const auditColumns = new Set(db.prepare('PRAGMA table_info(audit)').all().map((column) => column.name));
+  if (!auditColumns.has('actor')) db.exec('ALTER TABLE audit ADD COLUMN actor TEXT;');
 }
 
 function migrateModeration(db) {
@@ -125,11 +154,12 @@ export function closeDb() {
   }
 }
 
-export function audit(action, { serverId = null, detail = null, ip = null } = {}) {
+export function audit(action, { serverId = null, detail = null, ip = null, actor = null } = {}) {
   try {
+    const who = actor ?? auditContext.getStore()?.actor ?? null;
     getDb()
-      .prepare('INSERT INTO audit (ts, action, server_id, detail, ip) VALUES (?, ?, ?, ?, ?)')
-      .run(Date.now(), action, serverId, detail ? String(detail).slice(0, 500) : null, ip);
+      .prepare('INSERT INTO audit (ts, action, server_id, detail, ip, actor) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(Date.now(), action, serverId, detail ? String(detail).slice(0, 500) : null, ip, who);
   } catch (err) {
     console.error('[audit] falha ao gravar evento:', err.message);
   }
@@ -138,7 +168,7 @@ export function audit(action, { serverId = null, detail = null, ip = null } = {}
 export function listAudit(limit = 100) {
   const safeLimit = Math.min(Math.max(Number(limit) || 100, 1), 500);
   return getDb()
-    .prepare('SELECT id, ts, action, server_id AS serverId, detail, ip FROM audit ORDER BY id DESC LIMIT ?')
+    .prepare('SELECT id, ts, action, server_id AS serverId, detail, ip, actor FROM audit ORDER BY id DESC LIMIT ?')
     .all(safeLimit);
 }
 

@@ -9,23 +9,36 @@
     }
   </div>
   <div class="head-buttons">
-    <button class="btn" type="button" (click)="openPanel('groups')">
-      {{ panel() === 'groups' ? ('common.cancel' | t) : ('group.title' | t) }}
-    </button>
+    @if (auth.canWrite()) {
+      <button class="btn" type="button" (click)="openPanel('groups')">
+        {{ panel() === 'groups' ? ('common.cancel' | t) : ('group.title' | t) }}
+      </button>
+    }
     <button class="btn" type="button" (click)="openPanel('security')">
       {{ panel() === 'security' ? ('common.cancel' | t) : ('security.title' | t) }}
     </button>
-    <button class="btn" type="button" (click)="openPanel('license')">
-      {{ panel() === 'license' ? ('common.cancel' | t) : ('license.title' | t) }}
-    </button>
-    <button class="btn" type="button" (click)="openPanel('import')">
-      {{ panel() === 'import' ? ('common.cancel' | t) : ('dash.addExisting' | t) }}
-    </button>
-    <button class="btn primary" type="button" (click)="openPanel('create')">
-      {{ panel() === 'create' ? ('common.cancel' | t) : ('dash.newServer' | t) }}
-    </button>
+    @if (auth.isOwner()) {
+      <button class="btn" type="button" (click)="openPanel('users')">
+        {{ panel() === 'users' ? ('common.cancel' | t) : ('users.title' | t) }}
+      </button>
+      <button class="btn" type="button" (click)="openPanel('license')">
+        {{ panel() === 'license' ? ('common.cancel' | t) : ('license.title' | t) }}
+      </button>
+    }
+    @if (auth.canWrite()) {
+      <button class="btn" type="button" (click)="openPanel('import')">
+        {{ panel() === 'import' ? ('common.cancel' | t) : ('dash.addExisting' | t) }}
+      </button>
+      <button class="btn primary" type="button" (click)="openPanel('create')">
+        {{ panel() === 'create' ? ('common.cancel' | t) : ('dash.newServer' | t) }}
+      </button>
+    }
   </div>
 </section>
+
+@if (!auth.canWrite()) {
+  <div class="readonly-banner">{{ 'users.readonlyBanner' | t }}</div>
+}
 
 @if (error()) {
   <div class="error-box">{{ error() }}</div>
@@ -438,6 +451,127 @@
         {{ 'security.enable' | t }}
       </button>
     }
+  </div>
+}
+
+@if (panel() === 'users') {
+  <div class="panel create users-panel">
+    <header class="form-head">
+      <h2>{{ 'users.title' | t }}</h2>
+      <p class="muted small">{{ 'users.subtitle' | t }}</p>
+    </header>
+
+    @if (usersError()) {
+      <div class="error-box">{{ usersError() }}</div>
+    }
+
+    <form class="users-create" (ngSubmit)="createUser()">
+      <div class="field">
+        <label for="newUsername">{{ 'users.username' | t }}</label>
+        <input id="newUsername" name="newUsername" [(ngModel)]="userDraft.username" autocomplete="off" required />
+      </div>
+      <div class="field">
+        <label for="newPassword">{{ 'users.password' | t }}</label>
+        <input
+          id="newPassword"
+          name="newPassword"
+          type="password"
+          autocomplete="new-password"
+          [(ngModel)]="userDraft.password"
+          required
+        />
+        <span class="hint">{{ 'users.passwordHint' | t }}</span>
+      </div>
+      <div class="field">
+        <label for="newRole">{{ 'users.role' | t }}</label>
+        <select id="newRole" name="newRole" [(ngModel)]="userDraft.role">
+          <option value="viewer">{{ 'users.role.viewer' | t }}</option>
+          <option value="admin">{{ 'users.role.admin' | t }}</option>
+          <option value="owner">{{ 'users.role.owner' | t }}</option>
+        </select>
+      </div>
+      <button
+        class="btn primary"
+        type="submit"
+        [disabled]="usersBusy() || !userDraft.username || !userDraft.password"
+      >
+        @if (usersBusy()) {
+          <span class="spinner"></span>
+        }
+        {{ 'users.create' | t }}
+      </button>
+    </form>
+
+    <ul class="users-list">
+      @for (user of users(); track user.id) {
+        <li class="user-row" [class.disabled]="user.disabled">
+          <div class="user-main">
+            <strong>{{ user.username }}</strong>
+            @if (user.id === auth.me()?.id) {
+              <span class="pill">{{ 'users.you' | t }}</span>
+            }
+            @if (user.disabled) {
+              <span class="pill error">{{ 'users.disabled' | t }}</span>
+            }
+            @if (user.totpEnabled) {
+              <span class="pill running">2FA</span>
+            }
+            <span class="muted small">{{ 'users.lastLogin' | t }}: {{ lastLogin(user.lastLoginAt) }}</span>
+          </div>
+          <div class="user-actions">
+            <select
+              [ngModel]="user.role"
+              (ngModelChange)="changeRole(user, $event)"
+              [disabled]="usersBusy() || user.id === auth.me()?.id"
+              [attr.aria-label]="'users.role' | t"
+            >
+              <option value="viewer">{{ 'users.role.viewer' | t }}</option>
+              <option value="admin">{{ 'users.role.admin' | t }}</option>
+              <option value="owner">{{ 'users.role.owner' | t }}</option>
+            </select>
+            <button class="btn ghost" type="button" (click)="passwordDraft = { id: user.id, password: '' }">
+              {{ 'users.resetPassword' | t }}
+            </button>
+            @if (user.totpEnabled) {
+              <button class="btn ghost" type="button" [disabled]="usersBusy()" (click)="resetUserTotp(user)">
+                {{ 'users.resetTotp' | t }}
+              </button>
+            }
+            @if (user.id !== auth.me()?.id) {
+              <button class="btn ghost" type="button" [disabled]="usersBusy()" (click)="toggleUser(user)">
+                {{ (user.disabled ? 'users.enable' : 'users.disable') | t }}
+              </button>
+              <button class="btn danger" type="button" [disabled]="usersBusy()" (click)="deleteUser(user)">
+                {{ 'common.delete' | t }}
+              </button>
+            }
+          </div>
+          @if (passwordDraft.id === user.id) {
+            <form class="user-password" (ngSubmit)="resetPassword()">
+              <div class="field">
+                <label for="resetPassword">{{ 'users.newPassword' | t }}</label>
+                <input
+                  id="resetPassword"
+                  name="resetPassword"
+                  type="password"
+                  autocomplete="new-password"
+                  [(ngModel)]="passwordDraft.password"
+                  required
+                />
+              </div>
+              <div class="head-buttons">
+                <button class="btn primary" type="submit" [disabled]="usersBusy() || !passwordDraft.password">
+                  {{ 'common.save' | t }}
+                </button>
+                <button class="btn ghost" type="button" (click)="passwordDraft = { id: null, password: '' }">
+                  {{ 'common.cancel' | t }}
+                </button>
+              </div>
+            </form>
+          }
+        </li>
+      }
+    </ul>
   </div>
 }
 

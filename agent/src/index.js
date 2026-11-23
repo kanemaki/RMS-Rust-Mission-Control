@@ -5,6 +5,7 @@ import { createApi } from './api.js';
 import { loadConfig } from './store.js';
 import { runtimeManager } from './process-manager.js';
 import { closeAllSessions } from './players.js';
+import { migrateLegacyAuth } from './users.js';
 import { publicDir } from './paths.js';
 import { pruneSamples, recordSample } from './db.js';
 import { sampleProcess } from './procstats.js';
@@ -65,6 +66,7 @@ app.use((req, res) => {
 runtimeManager.sync(loadConfig().servers);
 closeAllSessions();
 pruneSamples();
+migrateLegacyAuth();
 
 const sampleTimer = setInterval(() => {
   for (const runtime of runtimeManager.all()) {

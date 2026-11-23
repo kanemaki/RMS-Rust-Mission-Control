@@ -3,7 +3,7 @@ import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { Subscription } from 'rxjs';
 import { ApiService } from '../../core/api.service';
-import { readError } from '../../core/auth.service';
+import { AuthService, readError } from '../../core/auth.service';
 import { EventsService } from '../../core/events.service';
 import { Backup, BackupSchedule, ChatFilter, ChatMessage, DiscordEvents, ConfigField, InsightsResponse, LogEntry, ModerationEntry, OxidePlugin, OxidePluginConfig, OxideStatus, Player, PlayerAction, PlayerDetail, PlayersResponse, SamplesResponse, Sample, Server, ServerConfig, ServerState, WipeSchedule, RestartSchedule, UpdateSchedule, Announcements } from '../../core/models';
 import { I18nService } from '../../core/i18n.service';
@@ -26,6 +26,7 @@ interface ChartSeries {
   imports: [FormsModule, RouterLink, TPipe],
   templateUrl: './server.html',
   styleUrl: './server.css',
+  host: { '[class.readonly]': '!auth.canWrite()' },
 })
 export class ServerPage implements OnInit, OnDestroy {
   private readonly api = inject(ApiService);
@@ -33,6 +34,7 @@ export class ServerPage implements OnInit, OnDestroy {
   private readonly route = inject(ActivatedRoute);
   private readonly router = inject(Router);
   private readonly i18n = inject(I18nService);
+  readonly auth = inject(AuthService);
   private sub: Subscription | null = null;
 
   readonly server = signal<Server | null>(null);

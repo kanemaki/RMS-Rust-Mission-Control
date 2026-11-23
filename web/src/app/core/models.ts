@@ -395,6 +395,27 @@ export interface TotpStatus {
   recoveryCodesLeft: number;
 }
 
+export type Role = 'owner' | 'admin' | 'viewer';
+
+export interface User {
+  id: number;
+  username: string;
+  role: Role;
+  disabled: boolean;
+  totpEnabled: boolean;
+  createdAt: number;
+  lastLoginAt: number | null;
+}
+
+export interface Me {
+  authenticated: true;
+  id: number;
+  username: string;
+  role: Role;
+  expiresAt: number;
+  totpEnabled: boolean;
+}
+
 export interface TotpSetup {
   secret: string;
   otpauth: string;

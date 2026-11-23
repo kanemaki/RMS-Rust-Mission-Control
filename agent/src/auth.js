@@ -1,6 +1,18 @@
 import crypto from 'node:crypto';
 import { getDb } from './db.js';
-import { loadConfig, saveConfig, ValidationError } from './store.js';
+import { ValidationError } from './store.js';
+import {
+  countUsers,
+  createUser,
+  findUserByUsername,
+  getUser,
+  migrateLegacyAuth,
+  ownerUser,
+  setUserPassword,
+  setUserTotp,
+  touchLogin,
+  verifyUserPassword,
+} from './users.js';
 import {
   generateRecoveryCodes,
   generateSecret,
@@ -12,126 +24,111 @@ import {
 const COOKIE = 'rmc_session';
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const CHALLENGE_TTL_MS = 5 * 60 * 1000;
-const SCRYPT_KEYLEN = 64;
+const EMPTY_TOTP = { enabled: false, secret: null, pendingSecret: null, recoveryCodes: [], enabledAt: null };
 
 export function needsSetup() {
-  return !loadConfig().auth.passwordHash;
+  migrateLegacyAuth();
+  return countUsers() === 0;
 }
 
+/**
+ * Compatibilidade com o fluxo antigo de setup: cria o primeiro proprietário
+ * (ou troca a senha do proprietário existente).
+ */
 export function setPassword(password) {
-  if (typeof password !== 'string' || password.length < 10) {
-    throw new ValidationError('A senha precisa ter ao menos 10 caracteres.');
+  migrateLegacyAuth();
+  const owner = ownerUser();
+  if (!owner) {
+    createUser({ username: 'owner', password, role: 'owner' });
+  } else {
+    setUserPassword(owner.id, password);
   }
-  if (password.length > 200) throw new ValidationError('Senha muito longa.');
-  const salt = crypto.randomBytes(16).toString('hex');
-  const hash = crypto.scryptSync(password, salt, SCRYPT_KEYLEN).toString('hex');
-  const config = loadConfig();
-  config.auth = {
-    passwordHash: hash,
-    salt,
-    createdAt: new Date().toISOString(),
-    totp: config.auth?.totp ?? { enabled: false, secret: null, pendingSecret: null, recoveryCodes: [], enabledAt: null },
-  };
-  saveConfig(config);
   getDb().prepare('DELETE FROM sessions').run();
   getDb().prepare('DELETE FROM pending_2fa').run();
 }
 
 export function verifyPassword(password) {
-  const { auth } = loadConfig();
-  if (!auth.passwordHash || !auth.salt) return false;
-  const expected = Buffer.from(auth.passwordHash, 'hex');
-  const actual = crypto.scryptSync(String(password ?? ''), auth.salt, SCRYPT_KEYLEN);
-  return expected.length === actual.length && crypto.timingSafeEqual(expected, actual);
+  migrateLegacyAuth();
+  const owner = ownerUser();
+  return owner ? verifyUserPassword(owner, password) : false;
 }
 
-export function totpEnabled() {
-  const { totp } = loadConfig().auth;
-  return Boolean(totp?.enabled && totp?.secret);
+export function totpEnabled(userId = null) {
+  const user = userId ? getUser(userId) : ownerUser();
+  return Boolean(user?.totp?.enabled && user?.totp?.secret);
 }
 
-export function beginTotpSetup({ account = 'painel' } = {}) {
-  const config = loadConfig();
-  if (config.auth.totp?.enabled) {
+export function beginTotpSetup({ account = 'painel', userId = null } = {}) {
+  const user = requireUser(userId);
+  if (user.totp?.enabled) {
     throw new ValidationError('A verificação em duas etapas já está ativa.');
   }
   const secret = generateSecret();
-  config.auth.totp = {
-    enabled: false,
-    secret: null,
-    pendingSecret: secret,
-    recoveryCodes: [],
-    enabledAt: null,
-  };
-  saveConfig(config);
-  return { secret, otpauth: otpauthUrl({ secret, account }) };
+  setUserTotp(user.id, { ...EMPTY_TOTP, pendingSecret: secret });
+  return { secret, otpauth: otpauthUrl({ secret, account: `${account}:${user.username}` }) };
 }
 
-export function confirmTotpSetup(code) {
-  const config = loadConfig();
-  const totp = config.auth.totp ?? {};
-  if (totp.enabled) throw new ValidationError('A verificação em duas etapas já está ativa.');
-  if (!totp.pendingSecret) throw new ValidationError('Inicie a configuração do 2FA antes de confirmar o código.');
-  if (!verifyTotp(totp.pendingSecret, code)) {
+export function confirmTotpSetup(code, userId = null) {
+  const user = requireUser(userId);
+  if (user.totp?.enabled) throw new ValidationError('A verificação em duas etapas já está ativa.');
+  if (!user.totp?.pendingSecret) throw new ValidationError('Inicie a configuração do 2FA antes de confirmar o código.');
+  if (!verifyTotp(user.totp.pendingSecret, code)) {
     throw new ValidationError('Código inválido. Confira o horário do dispositivo e tente novamente.');
   }
   const recoveryCodes = generateRecoveryCodes();
-  config.auth.totp = {
+  setUserTotp(user.id, {
     enabled: true,
-    secret: totp.pendingSecret,
+    secret: user.totp.pendingSecret,
     pendingSecret: null,
     recoveryCodes: recoveryCodes.map(hashRecoveryCode),
     enabledAt: new Date().toISOString(),
-  };
-  saveConfig(config);
+  });
   return { recoveryCodes };
 }
 
-export function disableTotp({ password, code }) {
-  if (!verifyPassword(password)) throw new ValidationError('Senha incorreta.');
-  if (!verifySecondFactor(code).ok) throw new ValidationError('Código inválido.');
-  const config = loadConfig();
-  config.auth.totp = { enabled: false, secret: null, pendingSecret: null, recoveryCodes: [], enabledAt: null };
-  saveConfig(config);
+export function disableTotp({ password, code }, userId = null) {
+  const user = requireUser(userId);
+  if (!verifyUserPassword(user, password)) throw new ValidationError('Senha incorreta.');
+  if (!verifySecondFactor(code, user.id).ok) throw new ValidationError('Código inválido.');
+  setUserTotp(user.id, EMPTY_TOTP);
 }
 
-export function verifySecondFactor(code) {
-  const totp = loadConfig().auth.totp ?? {};
+export function verifySecondFactor(code, userId = null) {
+  const user = requireUser(userId);
+  const totp = user.totp ?? EMPTY_TOTP;
   if (!totp.enabled || !totp.secret) return { ok: true, recovery: false };
   if (verifyTotp(totp.secret, code)) return { ok: true, recovery: false };
   const hash = hashRecoveryCode(code);
   const codes = Array.isArray(totp.recoveryCodes) ? totp.recoveryCodes : [];
   if (codes.includes(hash)) {
-    const config = loadConfig();
-    config.auth.totp.recoveryCodes = codes.filter((item) => item !== hash);
-    saveConfig(config);
+    setUserTotp(user.id, { ...totp, recoveryCodes: codes.filter((item) => item !== hash) });
     return { ok: true, recovery: true };
   }
   return { ok: false, recovery: false };
 }
 
-export function createPendingChallenge({ ip, userAgent }) {
+export function createPendingChallenge({ ip, userAgent, userId }) {
   const token = crypto.randomBytes(32).toString('base64url');
   const now = Date.now();
   const db = getDb();
   db.prepare('DELETE FROM pending_2fa WHERE expires_at < ?').run(now);
   db.prepare(
-    'INSERT INTO pending_2fa (token_hash, created_at, expires_at, ip, user_agent) VALUES (?, ?, ?, ?, ?)',
-  ).run(sha256(token), now, now + CHALLENGE_TTL_MS, ip ?? null, String(userAgent ?? '').slice(0, 300));
+    'INSERT INTO pending_2fa (token_hash, created_at, expires_at, ip, user_agent, user_id) VALUES (?, ?, ?, ?, ?, ?)',
+  ).run(sha256(token), now, now + CHALLENGE_TTL_MS, ip ?? null, String(userAgent ?? '').slice(0, 300), Number(userId));
   return { token, expiresAt: now + CHALLENGE_TTL_MS };
 }
 
 export function readPendingChallenge(token) {
   if (!token) return null;
   const row = getDb()
-    .prepare('SELECT token_hash, expires_at FROM pending_2fa WHERE token_hash = ?')
+    .prepare('SELECT token_hash, expires_at, user_id FROM pending_2fa WHERE token_hash = ?')
     .get(sha256(token));
   if (!row) return null;
   if (row.expires_at < Date.now()) {
     destroyPendingChallenge(token);
     return null;
   }
-  return { expiresAt: row.expires_at };
+  return { expiresAt: row.expires_at, userId: Number(row.user_id) };
 }
 
 export function destroyPendingChallenge(token) {
@@ -139,26 +136,40 @@ export function destroyPendingChallenge(token) {
   getDb().prepare('DELETE FROM pending_2fa WHERE token_hash = ?').run(sha256(token));
 }
 
-export function createSession({ ip, userAgent }) {  const token = crypto.randomBytes(32).toString('base64url');
+export function createSession({ ip, userAgent, userId = null }) {
+  const user = requireUser(userId);
+  const token = crypto.randomBytes(32).toString('base64url');
   const hash = sha256(token);
   const now = Date.now();
   getDb()
-    .prepare('INSERT INTO sessions (token_hash, created_at, expires_at, ip, user_agent) VALUES (?, ?, ?, ?, ?)')
-    .run(hash, now, now + SESSION_TTL_MS, ip ?? null, String(userAgent ?? '').slice(0, 300));
-  return { token, expiresAt: now + SESSION_TTL_MS };
+    .prepare(
+      'INSERT INTO sessions (token_hash, created_at, expires_at, ip, user_agent, user_id) VALUES (?, ?, ?, ?, ?, ?)',
+    )
+    .run(hash, now, now + SESSION_TTL_MS, ip ?? null, String(userAgent ?? '').slice(0, 300), user.id);
+  touchLogin(user.id);
+  return { token, expiresAt: now + SESSION_TTL_MS, user: { id: user.id, username: user.username, role: user.role } };
 }
 
 export function readSession(token) {
   if (!token) return null;
   const row = getDb()
-    .prepare('SELECT token_hash, expires_at FROM sessions WHERE token_hash = ?')
+    .prepare(
+      `SELECT s.token_hash, s.expires_at, s.user_id, u.username, u.role, u.disabled
+       FROM sessions s LEFT JOIN users u ON u.id = s.user_id
+       WHERE s.token_hash = ?`,
+    )
     .get(sha256(token));
   if (!row) return null;
-  if (row.expires_at < Date.now()) {
+  if (row.expires_at < Date.now() || !row.user_id || row.disabled) {
     getDb().prepare('DELETE FROM sessions WHERE token_hash = ?').run(row.token_hash);
     return null;
   }
-  return { expiresAt: row.expires_at };
+  return {
+    expiresAt: row.expires_at,
+    userId: Number(row.user_id),
+    username: row.username,
+    role: row.role,
+  };
 }
 
 export function destroySession(token) {
@@ -200,6 +211,22 @@ export function requireAuth(req, res, next) {
   }
   req.session = session;
   next();
+}
+
+/** Restringe a rota aos papéis informados. */
+export function requireRole(...roles) {
+  const allowed = roles.flat();
+  return (req, res, next) => {
+    if (!req.session) {
+      res.status(401).json({ error: 'Não autenticado.' });
+      return;
+    }
+    if (!allowed.includes(req.session.role)) {
+      res.status(403).json({ error: 'Seu papel não permite esta ação.', role: req.session.role });
+      return;
+    }
+    next();
+  };
 }
 
 export function requireSetupDone(req, res, next) {
@@ -256,6 +283,13 @@ export function resetTotpAttempts(ip) {
   totpAttempts.delete(ip);
 }
 
+function requireUser(userId) {
+  migrateLegacyAuth();
+  const user = userId ? getUser(userId) : ownerUser();
+  if (!user) throw new ValidationError('Usuário não encontrado.');
+  return user;
+}
+
 function parseCookies(header) {
   const out = {};
   for (const part of header.split(';')) {
@@ -269,3 +303,5 @@ function parseCookies(header) {
 function sha256(value) {
   return crypto.createHash('sha256').update(value).digest('hex');
 }
+
+export { findUserByUsername };

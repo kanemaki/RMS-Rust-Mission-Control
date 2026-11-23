@@ -3,7 +3,7 @@ import { FormsModule } from '@angular/forms';
 import { RouterLink } from '@angular/router';
 import { Subscription, forkJoin } from 'rxjs';
 import { ApiService } from '../../core/api.service';
-import { readError } from '../../core/auth.service';
+import { AuthService, readError } from '../../core/auth.service';
 import { EventsService } from '../../core/events.service';
 import {
   BatchAction,
@@ -16,11 +16,13 @@ import {
   ServerState,
   TotpSetup,
   TotpStatus,
+  User,
+  Role,
 } from '../../core/models';
 import { I18nService } from '../../core/i18n.service';
 import { TPipe } from '../../shared/t.pipe';
 
-type Panel = 'none' | 'create' | 'import' | 'groups' | 'security' | 'license';
+type Panel = 'none' | 'create' | 'import' | 'groups' | 'security' | 'license' | 'users';
 type ImportKind = 'local' | 'remote';
 type Manage = 'attach' | 'process';
 
@@ -41,6 +43,7 @@ export class DashboardPage implements OnInit, OnDestroy {
   private readonly api = inject(ApiService);
   private readonly events = inject(EventsService);
   private readonly i18n = inject(I18nService);
+  readonly auth = inject(AuthService);
   private sub: Subscription | null = null;
 
   readonly servers = signal<Server[]>([]);
@@ -71,6 +74,12 @@ export class DashboardPage implements OnInit, OnDestroy {
   readonly licenseBusy = signal(false);
   readonly licenseError = signal<string | null>(null);
   readonly licenseDraft = { text: '' };
+
+  readonly users = signal<User[]>([]);
+  readonly usersBusy = signal(false);
+  readonly usersError = signal<string | null>(null);
+  userDraft = { username: '', password: '', role: 'viewer' as Role };
+  passwordDraft = { id: null as number | null, password: '' };
 
   readonly selectedCount = computed(() => this.selectedIds().size);
 
@@ -176,6 +185,126 @@ export class DashboardPage implements OnInit, OnDestroy {
     this.panel.set(next);
     if (next === 'security') this.loadTotp();
     if (next === 'license') this.loadLicense();
+    if (next === 'users') this.loadUsers();
+  }
+
+  // ---- Usuários e papéis ----
+
+  loadUsers(): void {
+    this.usersError.set(null);
+    this.api.users().subscribe({
+      next: (list) => this.users.set(list),
+      error: (err) => this.usersError.set(readError(err, 'Falha ao carregar usuários.')),
+    });
+  }
+
+  createUser(): void {
+    const draft = this.userDraft;
+    if (!draft.username.trim() || !draft.password || this.usersBusy()) return;
+    this.usersBusy.set(true);
+    this.usersError.set(null);
+    this.api.createUser({ username: draft.username.trim(), password: draft.password, role: draft.role }).subscribe({
+      next: (user) => {
+        this.users.update((list) => [...list, user]);
+        this.userDraft = { username: '', password: '', role: 'viewer' };
+        this.usersBusy.set(false);
+      },
+      error: (err) => {
+        this.usersError.set(readError(err, 'Não foi possível criar o usuário.'));
+        this.usersBusy.set(false);
+      },
+    });
+  }
+
+  changeRole(user: User, role: Role): void {
+    if (role === user.role || this.usersBusy()) return;
+    this.usersBusy.set(true);
+    this.usersError.set(null);
+    this.api.updateUser(user.id, { role }).subscribe({
+      next: (updated) => {
+        this.users.update((list) => list.map((item) => (item.id === updated.id ? updated : item)));
+        this.usersBusy.set(false);
+      },
+      error: (err) => {
+        this.usersError.set(readError(err, 'Não foi possível alterar o papel.'));
+        this.usersBusy.set(false);
+        this.loadUsers();
+      },
+    });
+  }
+
+  toggleUser(user: User): void {
+    if (this.usersBusy()) return;
+    this.usersBusy.set(true);
+    this.usersError.set(null);
+    this.api.updateUser(user.id, { disabled: !user.disabled }).subscribe({
+      next: (updated) => {
+        this.users.update((list) => list.map((item) => (item.id === updated.id ? updated : item)));
+        this.usersBusy.set(false);
+      },
+      error: (err) => {
+        this.usersError.set(readError(err, 'Não foi possível alterar o usuário.'));
+        this.usersBusy.set(false);
+      },
+    });
+  }
+
+  resetPassword(): void {
+    const { id, password } = this.passwordDraft;
+    if (!id || !password || this.usersBusy()) return;
+    this.usersBusy.set(true);
+    this.usersError.set(null);
+    this.api.setUserPassword(id, password).subscribe({
+      next: () => {
+        this.passwordDraft = { id: null, password: '' };
+        this.usersBusy.set(false);
+      },
+      error: (err) => {
+        this.usersError.set(readError(err, 'Não foi possível trocar a senha.'));
+        this.usersBusy.set(false);
+      },
+    });
+  }
+
+  resetUserTotp(user: User): void {
+    if (this.usersBusy()) return;
+    this.usersBusy.set(true);
+    this.usersError.set(null);
+    this.api.resetUserTotp(user.id).subscribe({
+      next: (updated) => {
+        this.users.update((list) => list.map((item) => (item.id === updated.id ? updated : item)));
+        this.usersBusy.set(false);
+      },
+      error: (err) => {
+        this.usersError.set(readError(err, 'Não foi possível resetar o 2FA.'));
+        this.usersBusy.set(false);
+      },
+    });
+  }
+
+  deleteUser(user: User): void {
+    if (!confirm(this.i18n.t('users.deleteConfirm', { name: user.username }))) return;
+    this.usersBusy.set(true);
+    this.usersError.set(null);
+    this.api.deleteUser(user.id).subscribe({
+      next: () => {
+        this.users.update((list) => list.filter((item) => item.id !== user.id));
+        this.usersBusy.set(false);
+      },
+      error: (err) => {
+        this.usersError.set(readError(err, 'Não foi possível excluir o usuário.'));
+        this.usersBusy.set(false);
+      },
+    });
+  }
+
+  roleLabel(role: Role): string {
+    return this.i18n.t(`users.role.${role}`);
+  }
+
+  lastLogin(ts: number | null): string {
+    if (!ts) return this.i18n.t('users.never');
+    return new Date(ts).toLocaleString(this.i18n.lang() === 'pt' ? 'pt-BR' : 'en-US');
   }
 
   // ---- Licença offline ----

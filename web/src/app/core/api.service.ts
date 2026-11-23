@@ -27,6 +27,9 @@ import {
   ServerStatus,
   TotpSetup,
   TotpStatus,
+  User,
+  Me,
+  Role,
 } from './models';
 
 export interface LoginResponse {
@@ -48,16 +51,40 @@ export class ApiService {
     return this.http.post<{ ok: true }>('/api/setup', { password });
   }
 
-  login(password: string): Observable<LoginResponse> {
-    return this.http.post<LoginResponse>('/api/auth/login', { password });
+  login(username: string, password: string): Observable<LoginResponse> {
+    return this.http.post<LoginResponse>('/api/auth/login', { username, password });
   }
 
   logout(): Observable<{ ok: true }> {
     return this.http.post<{ ok: true }>('/api/auth/logout', {});
   }
 
-  me(): Observable<{ authenticated: true; expiresAt: number; totpEnabled: boolean }> {
-    return this.http.get<{ authenticated: true; expiresAt: number; totpEnabled: boolean }>('/api/auth/me');
+  me(): Observable<Me> {
+    return this.http.get<Me>('/api/auth/me');
+  }
+
+  users(): Observable<User[]> {
+    return this.http.get<User[]>('/api/users');
+  }
+
+  createUser(payload: { username: string; password: string; role: Role }): Observable<User> {
+    return this.http.post<User>('/api/users', payload);
+  }
+
+  updateUser(id: number, payload: { role?: Role; disabled?: boolean }): Observable<User> {
+    return this.http.patch<User>(`/api/users/${id}`, payload);
+  }
+
+  setUserPassword(id: number, password: string): Observable<{ ok: true }> {
+    return this.http.post<{ ok: true }>(`/api/users/${id}/password`, { password });
+  }
+
+  resetUserTotp(id: number): Observable<User> {
+    return this.http.post<User>(`/api/users/${id}/totp/reset`, {});
+  }
+
+  deleteUser(id: number): Observable<{ ok: true }> {
+    return this.http.delete<{ ok: true }>(`/api/users/${id}`);
   }
 
   loginTotp(challenge: string, code: string): Observable<{ ok: true; recovery: boolean }> {

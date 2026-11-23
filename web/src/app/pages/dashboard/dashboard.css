@@ -568,3 +568,89 @@
 .warn-text {
   color: var(--warn);
 }
+
+.readonly-banner {
+  margin: 0 0 16px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 1px solid rgba(240, 180, 60, 0.35);
+  background: rgba(240, 180, 60, 0.08);
+  color: var(--warn);
+  font-size: 13px;
+}
+
+.users-create {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  /* O row-gap maior abre espaço para o hint absoluto não invadir a linha seguinte. */
+  gap: 34px 12px;
+  align-items: end;
+  margin-bottom: 34px;
+}
+
+/* O hint fica fora do fluxo para não encurtar o campo e desalinhar os inputs. */
+.users-create .field {
+  position: relative;
+}
+
+.users-create .field .hint {
+  position: absolute;
+  top: 100%;
+  left: 2px;
+  right: 0;
+  margin-top: 4px;
+}
+
+.users-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.user-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--border-soft);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.user-row.disabled {
+  opacity: 0.6;
+}
+
+.user-main {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  flex: 1 1 320px;
+}
+
+.user-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.user-actions select {
+  min-width: 150px;
+}
+
+.user-password {
+  flex: 1 1 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 12px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--border-soft);
+}
+
