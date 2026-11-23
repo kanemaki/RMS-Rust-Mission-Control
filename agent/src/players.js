@@ -47,13 +47,17 @@ export function trackPlayers(serverId, list, now = Date.now()) {
   }
 
   const open = db
-    .prepare('SELECT id, steam_id FROM player_sessions WHERE server_id = ? AND left_at IS NULL')
+    .prepare('SELECT id, steam_id, name FROM player_sessions WHERE server_id = ? AND left_at IS NULL')
     .all(serverId);
   const openIds = new Set(open.map((session) => session.steam_id));
 
+  const left = [];
   const closeSession = db.prepare('UPDATE player_sessions SET left_at = ? WHERE id = ?');
   for (const session of open) {
-    if (!incoming.has(session.steam_id)) closeSession.run(now, session.id);
+    if (!incoming.has(session.steam_id)) {
+      closeSession.run(now, session.id);
+      left.push({ steamId: session.steam_id, name: session.name });
+    }
   }
 
   const findPlayer = db.prepare('SELECT steam_id FROM players WHERE server_id = ? AND steam_id = ?');
@@ -73,9 +77,11 @@ export function trackPlayers(serverId, list, now = Date.now()) {
     'UPDATE players SET session_count = session_count + 1, last_session_at = ? WHERE server_id = ? AND steam_id = ?',
   );
 
+  const joined = [];
   for (const [steamId, entry] of incoming) {
     const name = String(entry.name ?? '').trim() || steamId;
-    if (findPlayer.get(serverId, steamId)) {
+    const existing = findPlayer.get(serverId, steamId);
+    if (existing) {
       touchPlayer.run(name, now, serverId, steamId);
     } else {
       insertPlayer.run(serverId, steamId, name, now, now);
@@ -85,10 +91,11 @@ export function trackPlayers(serverId, list, now = Date.now()) {
     } else {
       openSession.run(serverId, steamId, name, now, now);
       bumpSession.run(now, serverId, steamId);
+      joined.push({ steamId, name, firstTime: !existing });
     }
   }
 
-  return { online: incoming.size };
+  return { online: incoming.size, joined, left };
 }
 
 /**

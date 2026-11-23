@@ -9,6 +9,7 @@ import {
   ChatFilter,
   ChatMessage,
   Group,
+  InsightsResponse,
   InstallScan,
   LicenseStatus,
   LogEntry,
@@ -208,6 +209,16 @@ export class ApiService {
     return this.http.post<{ message: string; response: string }>(`/api/servers/${id}/announce`, {
       ...(message ? { message } : {}),
     });
+  }
+
+  insights(id: string, days: number, inactiveDays?: number): Observable<InsightsResponse> {
+    return this.http.get<InsightsResponse>(`/api/servers/${id}/insights`, {
+      params: { days: String(days), ...(inactiveDays ? { inactiveDays: String(inactiveDays) } : {}) },
+    });
+  }
+
+  exportUrl(id: string, kind: 'players' | 'sessions'): string {
+    return `/api/servers/${id}/export/${kind}.csv`;
   }
 
   chatFilter(id: string): Observable<ChatFilter> {

@@ -7,10 +7,11 @@ import { logBus } from './logbus.js';
 import { updateServerFiles } from './steamcmd.js';
 import { isOxideInstalled, installOrUpdateOxide } from './oxide.js';
 import { serverLogsDir } from './paths.js';
-import { recordSample } from './db.js';
+import { recordSample, audit, getDb } from './db.js';
 import { createLineSplitter } from './lines.js';
 import { parsePlayerList } from './playerlist.js';
 import { trackPlayers, closeSessions, dueBans, resolveBans, recordModeration, normalizeAction, normalizeSteamId } from './players.js';
+import { inactivePlayers } from './insights.js';
 import { parseChatMessage, recordChat } from './chat.js';
 import { createBackup } from './backups.js';
 import { ConflictError } from './errors.js';
@@ -67,6 +68,12 @@ export class ServerRuntime {
     this.announceIndex = 0;
     this.readyTimer = null;
     this.playerTimer = null;
+    this.peakOnline = null;
+    this.inactiveNotified = new Set();
+    this.inactiveTimer = setInterval(() => void this.#checkInactivePlayers(), 6 * 60 * 60 * 1000);
+    this.inactiveTimer.unref?.();
+    this.inactiveBootTimer = setTimeout(() => void this.#checkInactivePlayers(), 60 * 1000);
+    this.inactiveBootTimer.unref?.();
     this.banTimer = setInterval(() => void this.#expireBans(), 30000);
     this.banTimer.unref?.();
     this.logStream = null;
@@ -351,6 +358,8 @@ export class ServerRuntime {
     clearTimeout(this.readyTimer);
     clearInterval(this.playerTimer);
     clearInterval(this.banTimer);
+    clearInterval(this.inactiveTimer);
+    clearTimeout(this.inactiveBootTimer);
     this.rcon?.stop();
     this.#closeLogStream();
     closeSessions(this.server.id);
@@ -573,10 +582,68 @@ export class ServerRuntime {
       this.players = parsed.players;
       if (parsed.maxPlayers) this.maxPlayers = parsed.maxPlayers;
       this.playerNames = parsed.names;
-      if (parsed.structured) trackPlayers(this.server.id, parsed.list);
+      if (parsed.structured) {
+        const tracked = trackPlayers(this.server.id, parsed.list);
+        this.#handlePlayerEvents(tracked);
+      }
       logBus.status(this.server.id, this.status());
     } catch {
       /* silencioso: o próximo ciclo tenta de novo */
+    }
+  }
+
+  #handlePlayerEvents({ joined = [], online = 0 }) {
+    for (const entry of joined) {
+      if (!entry.firstTime) continue;
+      audit('player_new', { serverId: this.server.id, detail: `${entry.name} (${entry.steamId})` });
+      void this.#notify(
+        'player_new',
+        'Novo jogador',
+        `${entry.name} (${entry.steamId}) entrou pela primeira vez.`,
+      );
+    }
+    if (this.peakOnline === null) this.peakOnline = this.#allTimePeak();
+    if (online >= 2 && online > this.peakOnline) {
+      audit('player_peak', { serverId: this.server.id, detail: String(online) });
+      void this.#notify('peak', 'Novo recorde de jogadores', `${online} jogadores online ao mesmo tempo.`);
+    }
+    this.peakOnline = Math.max(this.peakOnline, online);
+  }
+
+  #allTimePeak() {
+    try {
+      const row = getDb()
+        .prepare('SELECT MAX(players) AS peak FROM samples WHERE server_id = ?')
+        .get(this.server.id);
+      return Number(row?.peak) || 0;
+    } catch {
+      return 0;
+    }
+  }
+
+  #checkInactivePlayers() {
+    const days = Number(this.server.insights?.inactiveDays) || 14;
+    let list;
+    try {
+      list = inactivePlayers(this.server.id, days);
+    } catch {
+      return;
+    }
+    let sent = 0;
+    for (const player of list) {
+      if (this.inactiveNotified.has(player.steamId)) continue;
+      this.inactiveNotified.add(player.steamId);
+      if (sent >= 10) continue;
+      sent += 1;
+      audit('player_inactive', {
+        serverId: this.server.id,
+        detail: `${player.name} (${player.steamId}) há ${player.daysAgo} dias`,
+      });
+      void this.#notify(
+        'player_inactive',
+        'Jogador inativo',
+        `${player.name} (${player.steamId}) não entra há ${player.daysAgo} dias.`,
+      );
     }
   }
 

@@ -5,11 +5,11 @@ import { Subscription } from 'rxjs';
 import { ApiService } from '../../core/api.service';
 import { readError } from '../../core/auth.service';
 import { EventsService } from '../../core/events.service';
-import { Backup, BackupSchedule, ChatFilter, ChatMessage, DiscordEvents, ConfigField, LogEntry, ModerationEntry, OxidePlugin, OxidePluginConfig, OxideStatus, Player, PlayerAction, PlayerDetail, PlayersResponse, SamplesResponse, Sample, Server, ServerConfig, ServerState, WipeSchedule, RestartSchedule, UpdateSchedule, Announcements } from '../../core/models';
+import { Backup, BackupSchedule, ChatFilter, ChatMessage, DiscordEvents, ConfigField, InsightsResponse, LogEntry, ModerationEntry, OxidePlugin, OxidePluginConfig, OxideStatus, Player, PlayerAction, PlayerDetail, PlayersResponse, SamplesResponse, Sample, Server, ServerConfig, ServerState, WipeSchedule, RestartSchedule, UpdateSchedule, Announcements } from '../../core/models';
 import { I18nService } from '../../core/i18n.service';
 import { TPipe } from '../../shared/t.pipe';
 
-type Tab = 'console' | 'players' | 'chat' | 'config' | 'metrics' | 'plugins' | 'backups' | 'automation' | 'settings';
+type Tab = 'console' | 'players' | 'chat' | 'insights' | 'config' | 'metrics' | 'plugins' | 'backups' | 'automation' | 'settings';
 type MetricsRange = '24h' | '7d' | '30d';
 
 interface ChartSeries {
@@ -85,6 +85,11 @@ export class ServerPage implements OnInit, OnDestroy {
 
   readonly announceBusy = signal(false);
   readonly announcementDraft = signal('');
+
+  readonly insights = signal<InsightsResponse | null>(null);
+  readonly insightsDays = signal(30);
+  readonly insightsLoading = signal(false);
+  readonly insightRanges = [7, 30, 90];
 
   private readonly chartW = 600;
   private readonly chartH = 140;
@@ -203,6 +208,7 @@ export class ServerPage implements OnInit, OnDestroy {
     if (tab === 'backups') this.loadBackups();
     if (tab === 'players') this.loadPlayers();
     if (tab === 'chat') this.loadChat();
+    if (tab === 'insights') this.loadInsights();
   }
 
   loadOxide(): void {
@@ -391,6 +397,7 @@ export class ServerPage implements OnInit, OnDestroy {
   }
 
   openPlayer(steamId: string): void {
+    if (this.tab() !== 'players') this.setTab('players');
     this.playerBusy.set(steamId);
     this.api.player(this.id, steamId).subscribe({
       next: (detail) => {
@@ -493,6 +500,66 @@ export class ServerPage implements OnInit, OnDestroy {
       next: (list) => this.chat.set(list),
       error: (err) => this.error.set(readError(err, this.i18n.t('chat.title'))),
     });
+  }
+
+  exportUrl(kind: 'players' | 'sessions'): string {
+    return this.api.exportUrl(this.id, kind);
+  }
+
+  loadInsights(): void {
+    this.insightsLoading.set(true);
+    this.api.insights(this.id, this.insightsDays()).subscribe({
+      next: (data) => {
+        this.insights.set(data);
+        this.insightsLoading.set(false);
+      },
+      error: (err) => {
+        this.insightsLoading.set(false);
+        this.error.set(readError(err, this.i18n.t('insights.title')));
+      },
+    });
+  }
+
+  setInsightsDays(days: number): void {
+    if (days === this.insightsDays()) return;
+    this.insightsDays.set(days);
+    this.insights.set(null);
+    this.loadInsights();
+  }
+
+  heatmapCell(weekday: number, hour: number): number {
+    const data = this.insights();
+    if (!data) return 0;
+    const cell = data.heatmap.cells.find((item) => item.weekday === weekday && item.hour === hour);
+    return cell?.ms ?? 0;
+  }
+
+  heatLevel(ms: number): number {
+    const peak = this.insights()?.heatmap.peakMs ?? 0;
+    if (!ms || !peak) return 0;
+    return Math.min(4, Math.max(1, Math.ceil((ms / peak) * 4)));
+  }
+
+  heatTitle(weekday: number, hour: number): string {
+    const ms = this.heatmapCell(weekday, hour);
+    return `${this.weekdayLabel(weekday)} ${String(hour).padStart(2, '0')}:00 · ${this.duration(ms)}`;
+  }
+
+  weekdayLabel(weekday: number): string {
+    return this.i18n.t(`insights.weekday.${weekday}`);
+  }
+
+  duration(ms: number | null | undefined): string {
+    if (!ms || ms <= 0) return '—';
+    const totalMinutes = Math.round(ms / 60000);
+    const hours = Math.floor(totalMinutes / 60);
+    const minutes = totalMinutes % 60;
+    if (hours >= 24) {
+      const days = Math.floor(hours / 24);
+      return `${days}d ${hours % 24}h`;
+    }
+    if (hours > 0) return `${hours}h ${String(minutes).padStart(2, '0')}m`;
+    return `${minutes}m`;
   }
 
   setChatFlagged(flagged: boolean): void {

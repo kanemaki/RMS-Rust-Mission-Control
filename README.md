@@ -190,6 +190,9 @@ GET    /api/servers/:id/chat?flagged=1      histórico do chat (só sinalizadas 
 POST   /api/servers/:id/chat                { message } anúncio no chat via say
 GET    /api/servers/:id/chat-filter
 PUT    /api/servers/:id/chat-filter         { enabled, keywords, notifyDiscord }
+GET    /api/servers/:id/insights?days=30    tempo de jogo, heatmap, ranking e retenção
+GET    /api/servers/:id/export/players.csv  jogadores em CSV
+GET    /api/servers/:id/export/sessions.csv sessões em CSV
 
 GET    /api/servers/:id/oxide               status do Oxide e contagem de plugins
 POST   /api/servers/:id/oxide/install      instala/atualiza o Oxide (servidor parado)
@@ -252,6 +255,23 @@ A aba **Automação** do servidor concentra o que roda sozinho, sem clique:
 
 O status do servidor expõe `nextRestartAt`, `nextUpdateAt` e `nextAnnouncementAt`, e o painel
 mostra a próxima execução de cada um. Os horários usam o fuso local da máquina do agente.
+
+## Inteligência de jogadores
+
+A aba **Inteligência** transforma as sessões já gravadas em números, sem tabela nova:
+
+- **Tempo de jogo** total, hoje, 7 e 30 dias, média por sessão e dias ativos — no painel do
+  período e no perfil de cada jogador
+- **Heatmap** de dia da semana × hora local, com o tempo distribuído pelas horas que a sessão
+  realmente ocupou (uma sessão de 10:00 às 12:00 soma uma hora em cada faixa)
+- **Ranking** por tempo de jogo e por número de sessões, com atalho para o perfil
+- **Retenção**: novos jogadores, recorrentes e quem sumiu há N dias (padrão 14, ajustável em
+  `insights.inactiveDays`)
+- **Exportação CSV** de jogadores e sessões, com BOM para abrir direto no Excel
+
+Alertas opcionais no Discord: `player_new` (primeira entrada), `player_inactive` (sumiu há N
+dias, checado a cada 6 horas) e `peak` (novo recorde de jogadores online ao mesmo tempo). Todos
+vêm desligados por padrão e são ligados em **Ajustes → Discord**.
 
 ## Duas formas de cadastrar um servidor
 
@@ -508,7 +528,8 @@ licenciamento (assinatura Ed25519, trial, limite de servidores e modo somente le
 (sessões, notas, moderação e expiração de ban), chat (parsing, filtro por palavra-chave e histórico
 sinalizado) e um fluxo HTTP completo (setup → login → criar → iniciar → logs → parar). A operação
 automática cobre os cálculos de horário, a normalização de reinício/atualização/anúncios, a
-validação de modo remoto e o anúncio imediato com rotação contra um RCON falso.
+validação de modo remoto e o anúncio imediato com rotação contra um RCON falso. A inteligência de
+jogadores cobre tempo de jogo, heatmap por hora local, ranking, retenção, inativos e CSV.
 
 ## Roadmap
 
@@ -516,6 +537,7 @@ validação de modo remoto e o anúncio imediato com rotação contra um RCON fa
 - **Fase 3:** ~~plugins Oxide/uMod~~ ✔, ~~multi-servidor avançado (grupos e ações em lote)~~ ✔, ~~2FA (TOTP)~~ ✔, ~~licenciamento~~ ✔
 - **Fase 4:** ~~jogadores e sessões~~ ✔, ~~moderação por RCON (kick/ban/mute)~~ ✔, ~~super usuário (owner/unowner)~~ ✔, ~~chat ao vivo e filtro por palavra-chave~~ ✔, ~~ban sincronizado entre servidores do grupo~~ ✔
 - **Fase 5:** ~~reinício agendado com avisos~~ ✔, ~~atualização agendada~~ ✔, ~~anúncios recorrentes com rotação~~ ✔
+- **Fase 6:** ~~tempo de jogo e heatmap de atividade~~ ✔, ~~ranking e retenção~~ ✔, ~~perfil enriquecido~~ ✔, ~~alertas de jogador novo/inativo/pico~~ ✔, ~~exportação CSV~~ ✔
 
 > Projeto independente, não afiliado à Facepunch Studios. Não redistribui binários do jogo:
 > apenas automatiza o SteamCMD.

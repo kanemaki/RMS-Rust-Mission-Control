@@ -54,6 +54,7 @@ function defaultServer(detected = detectInstall()) {
     announcements: { enabled: false, intervalMinutes: 30, messages: [] },
     discord: defaultDiscord(),
     chatFilter: { enabled: false, keywords: [], notifyDiscord: true },
+    insights: { inactiveDays: 14 },
     autoUpdate: false,
     autoRestart: true,
     extraArgs: [],
@@ -194,6 +195,7 @@ export function normalizeServer(input, existing = null) {
   merged.announcements = normalizeAnnouncements(input.announcements, existing?.announcements ?? merged.announcements);
   merged.discord = normalizeDiscord(input.discord, existing?.discord ?? merged.discord);
   merged.chatFilter = normalizeChatFilter(input.chatFilter, existing?.chatFilter ?? merged.chatFilter);
+  merged.insights = normalizeInsights(input.insights, existing?.insights ?? merged.insights);
 
   merged.extraArgs = Array.isArray(merged.extraArgs)
     ? merged.extraArgs.map((arg) => String(arg)).filter(Boolean)
@@ -342,6 +344,14 @@ export function normalizeChatFilter(value, current = null) {  const base = curre
   }
   filter.keywords = keywords;
   return filter;
+}
+
+export function normalizeInsights(value, current = null) {
+  const base = current ?? { inactiveDays: 14 };
+  const input = value && typeof value === 'object' ? value : {};
+  const inactiveDays =
+    input.inactiveDays === undefined ? Number(base.inactiveDays) || 14 : Number(input.inactiveDays);
+  return { inactiveDays: clampInt(inactiveDays, 1, 365, 'insights.inactiveDays') };
 }
 
 function normalizeDiscord(value, current) {

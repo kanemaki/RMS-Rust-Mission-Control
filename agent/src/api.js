@@ -18,6 +18,7 @@ import { runtimeManager } from './process-manager.js';
 import { ConflictError } from './errors.js';
 import { logBus } from './logbus.js';
 import { closeSessions, getPlayer, listModeration, listPlayers, normalizeSteamId, setPlayerNote } from './players.js';
+import { playerStats, playersCsv, serverInsights, sessionsCsv } from './insights.js';
 import { listChat } from './chat.js';
 import { readConfig, writeConfig, launchPatch, validateValues, withoutSecrets } from './cfg.js';
 import { createBackup, deleteBackup, listBackups, restoreBackup } from './backups.js';
@@ -440,7 +441,7 @@ export function createApi({ secureCookies = false, version = '0.1.0' } = {}) {
       res.status(404).json({ error: 'Jogador não encontrado.' });
       return;
     }
-    res.json(player);
+    res.json({ ...player, stats: playerStats(server.id, steamId) });
   });
 
   router.patch('/servers/:id/players/:steamId', (req, res) => {
@@ -528,6 +529,32 @@ export function createApi({ secureCookies = false, version = '0.1.0' } = {}) {
       ip: req.ip,
     });
     res.json(updated?.chatFilter ?? filter);
+  });
+
+  router.get('/servers/:id/insights', (req, res) => {
+    const server = requireServer(req, res);
+    if (!server) return;
+    reconcileSessions(server);
+    res.json(
+      serverInsights(server.id, {
+        days: req.query.days,
+        inactiveDays: req.query.inactiveDays ?? server.insights?.inactiveDays,
+      }),
+    );
+  });
+
+  router.get('/servers/:id/export/players.csv', (req, res) => {
+    const server = requireServer(req, res);
+    if (!server) return;
+    res.setHeader('Content-Disposition', 'attachment; filename="players.csv"');
+    res.type('text/csv; charset=utf-8').send(playersCsv(server.id));
+  });
+
+  router.get('/servers/:id/export/sessions.csv', (req, res) => {
+    const server = requireServer(req, res);
+    if (!server) return;
+    res.setHeader('Content-Disposition', 'attachment; filename="sessions.csv"');
+    res.type('text/csv; charset=utf-8').send(sessionsCsv(server.id));
   });
 
   router.get('/servers/:id/config', (req, res) => {

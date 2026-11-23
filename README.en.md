@@ -193,6 +193,9 @@ GET    /api/servers/:id/chat?flagged=1      chat history (flagged only with flag
 POST   /api/servers/:id/chat                { message } chat announcement via say
 GET    /api/servers/:id/chat-filter
 PUT    /api/servers/:id/chat-filter         { enabled, keywords, notifyDiscord }
+GET    /api/servers/:id/insights?days=30    playtime, heatmap, ranking and retention
+GET    /api/servers/:id/export/players.csv  players as CSV
+GET    /api/servers/:id/export/sessions.csv sessions as CSV
 
 GET    /api/servers/:id/oxide               Oxide status and plugin count
 POST   /api/servers/:id/oxide/install      installs/updates Oxide (server stopped)
@@ -254,6 +257,23 @@ The server's **Automation** tab gathers everything that runs on its own, without
 
 The server status exposes `nextRestartAt`, `nextUpdateAt` and `nextAnnouncementAt`, and the panel
 shows the next run of each one. Times use the agent machine's local timezone.
+
+## Player intelligence
+
+The **Insights** tab turns the sessions already stored into numbers, with no new table:
+
+- **Playtime** total, today, 7 and 30 days, average per session and active days — in the period
+  panel and in each player's profile
+- **Heatmap** of weekday × local hour, spreading the time across the hours the session actually
+  occupied (a 10:00 to 12:00 session adds one hour to each slot)
+- **Ranking** by playtime and by session count, with a shortcut to the profile
+- **Retention**: new players, returning players and who has been gone for N days (default 14,
+  adjustable in `insights.inactiveDays`)
+- **CSV export** of players and sessions, with a BOM so it opens straight in Excel
+
+Optional Discord alerts: `player_new` (first join), `player_inactive` (gone for N days, checked
+every 6 hours) and `peak` (new record of players online at the same time). All are off by default
+and are enabled in **Settings → Discord**.
 
 ## Two ways to register a server
 
@@ -510,7 +530,8 @@ licensing (Ed25519 signature, trial, server limit and read-only mode), players (
 moderation and ban expiry), chat (parsing, keyword filter and flagged history) and a full HTTP flow
 (setup → login → create → start → logs → stop). Automated operation covers the time calculations,
 the restart/update/announcement normalization, the remote-mode validation and the immediate
-announcement with rotation against a fake RCON.
+announcement with rotation against a fake RCON. Player intelligence covers playtime, the heatmap by
+local hour, ranking, retention, inactive players and CSV export.
 
 ## Roadmap
 
@@ -518,6 +539,7 @@ announcement with rotation against a fake RCON.
 - **Phase 3:** ~~Oxide/uMod plugins~~ ✔, ~~advanced multi-server (groups and batch actions)~~ ✔, ~~2FA (TOTP)~~ ✔, ~~licensing~~ ✔
 - **Phase 4:** ~~players and sessions~~ ✔, ~~RCON moderation (kick/ban/mute)~~ ✔, ~~super user (owner/unowner)~~ ✔, ~~live chat and keyword filter~~ ✔, ~~ban sync across group servers~~ ✔
 - **Phase 5:** ~~scheduled restart with warnings~~ ✔, ~~scheduled update~~ ✔, ~~recurring announcements with rotation~~ ✔
+- **Phase 6:** ~~playtime and activity heatmap~~ ✔, ~~ranking and retention~~ ✔, ~~enriched player profile~~ ✔, ~~new/inactive/peak player alerts~~ ✔, ~~CSV export~~ ✔
 
 > Independent project, not affiliated with Facepunch Studios. Does not redistribute game binaries:
 > it only automates SteamCMD.

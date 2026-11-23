@@ -120,6 +120,68 @@ export interface PlayerDetail extends Player {
   sessions: PlayerSession[];
   moderation: ModerationEntry[];
   chatCount: number;
+  stats: PlayerStats;
+}
+
+export interface PlayerStats {
+  steamId: string;
+  totalMs: number;
+  todayMs: number;
+  weekMs: number;
+  monthMs: number;
+  avgSessionMs: number;
+  sessions: number;
+  activeDays: number;
+  firstSeen: number | null;
+  lastSeen: number | null;
+  sessionCount: number;
+}
+
+export interface HeatmapCell {
+  weekday: number;
+  hour: number;
+  ms: number;
+  sessions: number;
+}
+
+export interface InsightsRanking {
+  steamId: string;
+  name: string;
+  ms: number;
+  sessions: number;
+}
+
+export interface InsightsResponse {
+  days: number;
+  inactiveDays: number;
+  since: number;
+  until: number;
+  totals: {
+    players: number;
+    online: number;
+    sessions: number;
+    totalMs: number;
+    todayMs: number;
+    avgSessionMs: number;
+    activeToday: number;
+    newPlayers: number;
+    returningPlayers: number;
+    inactivePlayers: number;
+  };
+  heatmap: {
+    days: number;
+    since: number;
+    until: number;
+    cells: HeatmapCell[];
+    peakMs: number;
+    totalMs: number;
+  };
+  topByTime: InsightsRanking[];
+  topBySessions: InsightsRanking[];
+  retention: {
+    newPlayers: { steamId: string; name: string; firstSeen: number }[];
+    inactive: { steamId: string; name: string; lastSeen: number; daysAgo: number }[];
+  };
 }
 
 export interface PlayersResponse {
