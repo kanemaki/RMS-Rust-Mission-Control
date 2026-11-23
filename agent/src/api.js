@@ -408,6 +408,15 @@ export function createApi({ secureCookies = false, version = '0.1.0' } = {}) {
     res.json({ response });
   });
 
+  router.post('/servers/:id/announce', async (req, res) => {
+    const runtime = requireRuntime(req, res);
+    if (!runtime) return;
+    const message = req.body?.message === undefined ? null : req.body.message;
+    const result = await runtime.announceNow(message);
+    audit('server_announce', { serverId: runtime.server.id, detail: result.message, ip: req.ip });
+    res.json(result);
+  });
+
   router.get('/servers/:id/logs', (req, res) => {
     const runtime = requireRuntime(req, res);
     if (!runtime) return;

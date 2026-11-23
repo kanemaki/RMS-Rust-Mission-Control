@@ -172,6 +172,7 @@ POST   /api/servers/:id/stop
 POST   /api/servers/:id/restart      { skipUpdate? }
 POST   /api/servers/:id/update
 POST   /api/servers/:id/command      { command }
+POST   /api/servers/:id/announce     { message? } sends an announcement now (rotation when omitted)
 
 GET    /api/servers/:id/logs?limit=
 GET    /api/servers/:id/config
@@ -235,6 +236,24 @@ kick/ban/mute.
 
 The data lives in the agent's SQLite (`players`, `player_sessions`, `moderation`, `chat_messages`)
 and is capped per server so it does not grow without control.
+
+## Automated operation
+
+The server's **Automation** tab gathers everything that runs on its own, without a click:
+
+- **Scheduled restart** (local server): every day at the chosen time, announcing in-game at 10, 5
+  and 1 minute. **Only restart when no players are online** skips the slot while someone is
+  playing. If a wipe or update is running, the restart is skipped for that day instead of
+  competing for the operation.
+- **Scheduled update** (local server): stops the server, runs SteamCMD, reinstalls Oxide when
+  present and, if **start the server again after updating** is checked, starts it again. Never
+  runs together with a wipe.
+- **Recurring announcements**: messages sent via `say` every N minutes (1 to 1440), in rotation,
+  up to 20 messages of 200 characters. Also works on a remote server, because it only uses RCON.
+  **Send now** fires the next message in the rotation or the text typed in the field.
+
+The server status exposes `nextRestartAt`, `nextUpdateAt` and `nextAnnouncementAt`, and the panel
+shows the next run of each one. Times use the agent machine's local timezone.
 
 ## Two ways to register a server
 
@@ -489,13 +508,16 @@ Covers config normalization, `server.cfg` roundtrip, scrypt/sessions, the RCON c
 WebSocket, the process lifecycle with a simulated server, groups and batch actions, 2FA (TOTP),
 licensing (Ed25519 signature, trial, server limit and read-only mode), players (sessions, notes,
 moderation and ban expiry), chat (parsing, keyword filter and flagged history) and a full HTTP flow
-(setup → login → create → start → logs → stop).
+(setup → login → create → start → logs → stop). Automated operation covers the time calculations,
+the restart/update/announcement normalization, the remote-mode validation and the immediate
+announcement with rotation against a fake RCON.
 
 ## Roadmap
 
 - **Phase 2:** ~~Discord alerts, automatic backup, historical metrics~~ ✔
 - **Phase 3:** ~~Oxide/uMod plugins~~ ✔, ~~advanced multi-server (groups and batch actions)~~ ✔, ~~2FA (TOTP)~~ ✔, ~~licensing~~ ✔
 - **Phase 4:** ~~players and sessions~~ ✔, ~~RCON moderation (kick/ban/mute)~~ ✔, ~~super user (owner/unowner)~~ ✔, ~~live chat and keyword filter~~ ✔, ~~ban sync across group servers~~ ✔
+- **Phase 5:** ~~scheduled restart with warnings~~ ✔, ~~scheduled update~~ ✔, ~~recurring announcements with rotation~~ ✔
 
 > Independent project, not affiliated with Facepunch Studios. Does not redistribute game binaries:
 > it only automates SteamCMD.

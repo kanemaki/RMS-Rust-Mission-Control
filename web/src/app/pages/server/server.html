@@ -77,9 +77,12 @@
       <button type="button" [class.active]="tab() === 'plugins'" (click)="setTab('plugins')">
         {{ 'server.tab.plugins' | t }}
       </button>
-      <button type="button" [class.active]="tab() === 'backups'" (click)="setTab('backups')">
-        {{ 'server.tab.backups' | t }}
-      </button>
+    <button type="button" [class.active]="tab() === 'backups'" (click)="setTab('backups')">
+      {{ 'server.tab.backups' | t }}
+    </button>
+    <button type="button" [class.active]="tab() === 'automation'" (click)="setTab('automation')">
+      {{ 'server.tab.automation' | t }}
+    </button>
     }
     <button type="button" [class.active]="tab() === 'settings'" (click)="setTab('settings')">
       {{ 'server.tab.settings' | t }}
@@ -666,6 +669,160 @@
         @if (s.status?.state === 'running') {
           <p class="hint">{{ 'server.backups.stopFirst' | t }}</p>
         }
+      </section>
+    }
+
+    @case ('automation') {
+      <section class="panel automation-panel">
+        <div class="panel-head">
+          <div>
+            <h2>{{ 'server.automation.title' | t }}</h2>
+            <p class="muted small">{{ 'server.automation.subtitle' | t }}</p>
+          </div>
+          <button class="btn primary" type="button" [disabled]="busy()" (click)="saveSettings()">
+            @if (busy()) {
+              <span class="spinner"></span>
+            }
+            {{ 'common.save' | t }}
+          </button>
+        </div>
+
+        <fieldset class="wipe-settings">
+          <legend>{{ 'server.automation.restart.title' | t }}</legend>
+          <label class="switch">
+            <input
+              type="checkbox"
+              name="restartEnabled"
+              [(ngModel)]="settings.restartSchedule.enabled"
+              [disabled]="isRemote()"
+            />
+            <span>{{ 'server.automation.restart.enabled' | t }}</span>
+          </label>
+          @if (isRemote()) {
+            <p class="hint">{{ 'server.automation.localOnly' | t }}</p>
+          } @else if (settings.restartSchedule.enabled) {
+            <div class="config-grid wipe-grid">
+              <div class="field">
+                <label for="restart-time">{{ 'server.automation.time' | t }}</label>
+                <input id="restart-time" name="restart-time" type="time" [(ngModel)]="settings.restartSchedule.time" />
+              </div>
+            </div>
+            <label class="switch">
+              <input type="checkbox" name="restartOnlyIfEmpty" [(ngModel)]="settings.restartSchedule.onlyIfEmpty" />
+              <span>{{ 'server.automation.restart.onlyIfEmpty' | t }}</span>
+            </label>
+            <p class="hint">{{ 'server.automation.restart.hint' | t }}</p>
+            @if (s.status?.nextRestartAt) {
+              <p class="hint">
+                {{ 'server.automation.next' | t }} <strong>{{ date(s.status!.nextRestartAt!) }}</strong>
+              </p>
+            }
+          }
+        </fieldset>
+
+        <fieldset class="wipe-settings">
+          <legend>{{ 'server.automation.update.title' | t }}</legend>
+          <label class="switch">
+            <input
+              type="checkbox"
+              name="updateEnabled"
+              [(ngModel)]="settings.updateSchedule.enabled"
+              [disabled]="isRemote()"
+            />
+            <span>{{ 'server.automation.update.enabled' | t }}</span>
+          </label>
+          @if (isRemote()) {
+            <p class="hint">{{ 'server.automation.localOnly' | t }}</p>
+          } @else if (settings.updateSchedule.enabled) {
+            <div class="config-grid wipe-grid">
+              <div class="field">
+                <label for="update-time">{{ 'server.automation.time' | t }}</label>
+                <input id="update-time" name="update-time" type="time" [(ngModel)]="settings.updateSchedule.time" />
+              </div>
+            </div>
+            <label class="switch">
+              <input type="checkbox" name="updateRestartAfter" [(ngModel)]="settings.updateSchedule.restartAfter" />
+              <span>{{ 'server.automation.update.restartAfter' | t }}</span>
+            </label>
+            <p class="hint">{{ 'server.automation.update.hint' | t }}</p>
+            @if (s.status?.nextUpdateAt) {
+              <p class="hint">
+                {{ 'server.automation.next' | t }} <strong>{{ date(s.status!.nextUpdateAt!) }}</strong>
+              </p>
+            }
+          }
+        </fieldset>
+
+        <fieldset class="wipe-settings">
+          <legend>{{ 'server.automation.announce.title' | t }}</legend>
+          <label class="switch">
+            <input type="checkbox" name="announceEnabled" [(ngModel)]="settings.announcements.enabled" />
+            <span>{{ 'server.automation.announce.enabled' | t }}</span>
+          </label>
+          @if (settings.announcements.enabled) {
+            <div class="config-grid wipe-grid">
+              <div class="field">
+                <label for="announce-interval">{{ 'server.automation.announce.interval' | t }}</label>
+                <input
+                  id="announce-interval"
+                  name="announce-interval"
+                  type="number"
+                  min="1"
+                  max="1440"
+                  [(ngModel)]="settings.announcements.intervalMinutes"
+                />
+              </div>
+            </div>
+            <div class="field">
+              <label for="announce-draft">{{ 'server.automation.announce.messages' | t }}</label>
+              <div class="inline-form">
+                <input
+                  id="announce-draft"
+                  name="announce-draft"
+                  maxlength="200"
+                  [ngModel]="announcementDraft()"
+                  (ngModelChange)="announcementDraft.set($event)"
+                  (keyup.enter)="addAnnouncementMessage()"
+                />
+                <button class="btn sm" type="button" (click)="addAnnouncementMessage()">
+                  {{ 'common.add' | t }}
+                </button>
+              </div>
+              <span class="hint">{{ 'server.automation.announce.addHint' | t }}</span>
+            </div>
+            @if (settings.announcements.messages.length) {
+              <ul class="announce-list">
+                @for (message of settings.announcements.messages; track $index) {
+                  <li>
+                    <span>{{ message }}</span>
+                    <button class="btn sm danger" type="button" (click)="removeAnnouncementMessage($index)">
+                      {{ 'common.delete' | t }}
+                    </button>
+                  </li>
+                }
+              </ul>
+            } @else {
+              <p class="hint">{{ 'server.automation.announce.empty' | t }}</p>
+            }
+            @if (s.status?.nextAnnouncementAt) {
+              <p class="hint">
+                {{ 'server.automation.next' | t }} <strong>{{ date(s.status!.nextAnnouncementAt!) }}</strong>
+              </p>
+            }
+            <button
+              class="btn sm"
+              type="button"
+              [disabled]="announceBusy() || s.status?.state !== 'running'"
+              (click)="sendAnnouncementNow()"
+            >
+              @if (announceBusy()) {
+                <span class="spinner"></span>
+              }
+              {{ 'server.automation.announce.sendNow' | t }}
+            </button>
+            <p class="hint">{{ 'server.automation.announce.sendNowHint' | t }}</p>
+          }
+        </fieldset>
       </section>
     }
 

@@ -17,6 +17,7 @@ import { ConflictError } from './errors.js';
 import { notifyDiscord } from './discord.js';
 import { clearWipeData, nextMonthlyWipeAt } from './wipe-scheduler.js';
 import { nextDailyBackupAt, pruneScheduledBackups } from './backup-scheduler.js';
+import { nextDailyAt, nextIntervalAt, sanitizeAnnouncement } from './schedule.js';
 import { updateServer } from './store.js';
 
 const READY_RE = /server startup complete|steamServer initialized|server initialized/i;
@@ -54,6 +55,16 @@ export class ServerRuntime {
     this.backupTimer = null;
     this.backupInProgress = false;
     this.scheduledBackupAt = null;
+    this.restartScheduleTimer = null;
+    this.restartInProgress = false;
+    this.scheduledRestartAt = null;
+    this.restartWarningThreshold = null;
+    this.updateScheduleTimer = null;
+    this.updateInProgress = false;
+    this.scheduledUpdateAt = null;
+    this.announceTimer = null;
+    this.scheduledAnnouncementAt = null;
+    this.announceIndex = 0;
     this.readyTimer = null;
     this.playerTimer = null;
     this.banTimer = setInterval(() => void this.#expireBans(), 30000);
@@ -63,6 +74,9 @@ export class ServerRuntime {
     this.lastLines = [];
     this.#scheduleWipe();
     this.#scheduleBackup();
+    this.#scheduleDailyRestart();
+    this.#scheduleUpdate();
+    this.#scheduleAnnouncements();
   }
 
   applyConfig(server) {
@@ -78,6 +92,9 @@ export class ServerRuntime {
     }
     this.#scheduleWipe();
     this.#scheduleBackup();
+    this.#scheduleDailyRestart();
+    this.#scheduleUpdate();
+    this.#scheduleAnnouncements();
     logBus.status(this.server.id, this.status());
   }
 
@@ -108,6 +125,9 @@ export class ServerRuntime {
       autoUpdate: this.server.autoUpdate,
       nextWipeAt: this.scheduledWipeAt,
       nextBackupAt: this.scheduledBackupAt,
+      nextRestartAt: this.scheduledRestartAt,
+      nextUpdateAt: this.scheduledUpdateAt,
+      nextAnnouncementAt: this.scheduledAnnouncementAt,
       install: this.remote
         ? null
         : {
@@ -325,6 +345,9 @@ export class ServerRuntime {
     clearTimeout(this.restartTimer);
     clearTimeout(this.wipeTimer);
     clearTimeout(this.backupTimer);
+    clearTimeout(this.restartScheduleTimer);
+    clearTimeout(this.updateScheduleTimer);
+    clearTimeout(this.announceTimer);
     clearTimeout(this.readyTimer);
     clearInterval(this.playerTimer);
     clearInterval(this.banTimer);
@@ -565,6 +588,218 @@ export class ServerRuntime {
       this.#setState('running');
       this.#log('agent', 'Servidor pronto.');
     }
+  }
+
+  #scheduleDailyRestart() {
+    clearTimeout(this.restartScheduleTimer);
+    this.restartWarningThreshold = null;
+    const schedule = this.server.restartSchedule;
+    if (!schedule?.enabled || this.remote) {
+      this.scheduledRestartAt = null;
+      return;
+    }
+    this.scheduledRestartAt = nextDailyAt(schedule.time);
+    this.#armDailyRestartTimer();
+  }
+
+  #armDailyRestartTimer() {
+    if (!this.scheduledRestartAt || this.restartInProgress) return;
+    const remaining = this.scheduledRestartAt - Date.now();
+    if (remaining <= 0) {
+      this.restartWarningThreshold = null;
+      this.restartScheduleTimer = setTimeout(() => void this.#runScheduledRestart(), 0);
+      return;
+    }
+
+    const threshold = WIPE_WARNINGS.find((minutes) => remaining > minutes * 60 * 1000);
+    this.restartWarningThreshold = threshold ?? null;
+    const targetAt = threshold ? this.scheduledRestartAt - threshold * 60 * 1000 : this.scheduledRestartAt;
+    const delay = Math.min(Math.max(0, targetAt - Date.now()), MAX_TIMER_MS);
+    this.restartScheduleTimer = setTimeout(() => {
+      if (Date.now() < targetAt - 1000) {
+        this.#armDailyRestartTimer();
+        return;
+      }
+      if (this.scheduledRestartAt - Date.now() <= 0) {
+        void this.#runScheduledRestart();
+        return;
+      }
+      const remainingNow = this.scheduledRestartAt - Date.now();
+      const warningMs = this.restartWarningThreshold * 60 * 1000;
+      if (this.restartWarningThreshold && Math.abs(remainingNow - warningMs) <= 30_000) {
+        void this.#sendRestartWarning(this.restartWarningThreshold);
+      }
+      this.#armDailyRestartTimer();
+    }, delay);
+    this.restartScheduleTimer.unref?.();
+  }
+
+  async #sendRestartWarning(minutes) {
+    if (this.state !== 'running' || !this.rcon?.connected) return;
+    const notice = `Server restart in ${minutes} min / Reinício do servidor em ${minutes} min.`;
+    try {
+      await this.command(`say ${notice}`);
+    } catch (error) {
+      this.#log('agent', `Não foi possível enviar o aviso do reinício (${minutes} min): ${error.message}`);
+    }
+  }
+
+  async #runScheduledRestart() {
+    if (this.restartInProgress || !this.server.restartSchedule?.enabled || this.remote) return;
+    this.restartInProgress = true;
+    clearTimeout(this.restartScheduleTimer);
+    try {
+      if (this.wipeInProgress || this.updateInProgress || ['starting', 'stopping', 'updating'].includes(this.state)) {
+        this.#log('agent', 'Reinício agendado ignorado: o servidor está em outra operação.');
+        return;
+      }
+      if (this.state !== 'running') {
+        this.#log('agent', 'Reinício agendado ignorado: o servidor não está em execução.');
+        return;
+      }
+      if (this.server.restartSchedule.onlyIfEmpty && (this.players ?? 0) > 0) {
+        this.#log('agent', `Reinício agendado ignorado: ${this.players} jogador(es) online.`);
+        void this.#notify(
+          'restart',
+          'Reinício agendado ignorado',
+          `${this.players} jogador(es) online no horário previsto.`,
+        );
+        return;
+      }
+      this.#log('agent', 'Iniciando reinício agendado...');
+      try {
+        await this.command('say Reinício do servidor agora / Server restarting now.');
+      } catch {
+        /* segue para o reinício */
+      }
+      await this.restart({ skipUpdate: true });
+      this.#log('agent', 'Reinício agendado concluído.');
+      void this.#notify('restart', 'Reinício agendado concluído', 'O servidor foi reiniciado no horário programado.');
+    } catch (error) {
+      this.#log('agent', `Falha no reinício agendado: ${error.message}`);
+      void this.#notify('restart', 'Falha no reinício agendado', error.message);
+    } finally {
+      this.restartInProgress = false;
+      this.#scheduleDailyRestart();
+      logBus.status(this.server.id, this.status());
+    }
+  }
+
+  #scheduleUpdate() {
+    clearTimeout(this.updateScheduleTimer);
+    const schedule = this.server.updateSchedule;
+    if (!schedule?.enabled || this.remote) {
+      this.scheduledUpdateAt = null;
+      return;
+    }
+    this.scheduledUpdateAt = nextDailyAt(schedule.time);
+    this.#armUpdateTimer();
+  }
+
+  #armUpdateTimer() {
+    if (!this.scheduledUpdateAt || this.updateInProgress) return;
+    const delay = Math.min(Math.max(0, this.scheduledUpdateAt - Date.now()), MAX_TIMER_MS);
+    this.updateScheduleTimer = setTimeout(() => {
+      if (this.scheduledUpdateAt - Date.now() > 1000) {
+        this.#armUpdateTimer();
+        return;
+      }
+      void this.#runScheduledUpdate();
+    }, delay);
+    this.updateScheduleTimer.unref?.();
+  }
+
+  async #runScheduledUpdate() {
+    if (this.updateInProgress || !this.server.updateSchedule?.enabled || this.remote) return;
+    this.updateInProgress = true;
+    clearTimeout(this.updateScheduleTimer);
+    const wasRunning = this.state === 'running';
+    try {
+      if (this.wipeInProgress || ['starting', 'stopping', 'updating'].includes(this.state)) {
+        this.#log('agent', 'Atualização agendada ignorada: o servidor está em outra operação.');
+        return;
+      }
+      this.#log('agent', 'Iniciando atualização agendada...');
+      if (wasRunning) {
+        try {
+          await this.command('say Atualização do servidor agora / Server updating now.');
+        } catch {
+          /* segue para a parada */
+        }
+        await this.stop();
+      }
+      const result = await this.#runUpdate();
+      if (result.ok) {
+        this.#log('agent', 'Atualização agendada concluída.');
+        void this.#notify('update', 'Atualização agendada concluída', 'Os arquivos do servidor foram atualizados.');
+      } else {
+        void this.#notify(
+          'update',
+          'Falha na atualização agendada',
+          result.error ?? `SteamCMD retornou código ${result.code}`,
+        );
+      }
+      if (wasRunning && this.server.updateSchedule.restartAfter) {
+        await this.start({ skipUpdate: true });
+      }
+    } catch (error) {
+      this.#log('agent', `Falha na atualização agendada: ${error.message}`);
+      void this.#notify('update', 'Falha na atualização agendada', error.message);
+    } finally {
+      this.updateInProgress = false;
+      this.#scheduleUpdate();
+      logBus.status(this.server.id, this.status());
+    }
+  }
+
+  #scheduleAnnouncements() {
+    clearTimeout(this.announceTimer);
+    const config = this.server.announcements;
+    if (!config?.enabled || !config.messages?.length) {
+      this.scheduledAnnouncementAt = null;
+      return;
+    }
+    this.scheduledAnnouncementAt = nextIntervalAt(config.intervalMinutes);
+    this.#armAnnounceTimer();
+  }
+
+  #armAnnounceTimer() {
+    if (!this.scheduledAnnouncementAt) return;
+    const delay = Math.min(Math.max(0, this.scheduledAnnouncementAt - Date.now()), MAX_TIMER_MS);
+    this.announceTimer = setTimeout(() => {
+      if (this.scheduledAnnouncementAt - Date.now() > 1000) {
+        this.#armAnnounceTimer();
+        return;
+      }
+      void this.#runAnnouncement();
+    }, delay);
+    this.announceTimer.unref?.();
+  }
+
+  async #runAnnouncement() {
+    clearTimeout(this.announceTimer);
+    try {
+      if (this.server.announcements?.enabled && this.state === 'running' && this.rcon?.connected) {
+        await this.announceNow();
+      }
+    } catch (error) {
+      this.#log('agent', `Falha ao enviar anúncio automático: ${error.message}`);
+    } finally {
+      this.#scheduleAnnouncements();
+      logBus.status(this.server.id, this.status());
+    }
+  }
+
+  /** Envia um anúncio agora. Sem `message`, usa a próxima da rotação configurada. */
+  async announceNow(message = null) {
+    const messages = this.server.announcements?.messages ?? [];
+    const rotating = message === null || message === undefined;
+    const text = sanitizeAnnouncement(rotating ? messages[this.announceIndex % Math.max(1, messages.length)] : message);
+    if (!text) throw new ConflictError('Nenhuma mensagem de anúncio configurada.');
+    if (!this.rcon?.connected) throw new ConflictError('RCON não está conectado.');
+    const response = await this.command(`say ${text}`);
+    if (rotating && messages.length) this.announceIndex = (this.announceIndex + 1) % messages.length;
+    return { message: text, response };
   }
 
   #scheduleWipe() {

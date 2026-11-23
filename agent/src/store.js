@@ -49,6 +49,9 @@ function defaultServer(detected = detectInstall()) {
     startedAtOverride: null,
     wipeSchedule: { enabled: false, dayOfMonth: 1, time: '04:00', type: 'map', rotateSeed: false },
     backupSchedule: { enabled: false, time: '03:00', keep: 7 },
+    restartSchedule: { enabled: false, time: '06:00', onlyIfEmpty: false },
+    updateSchedule: { enabled: false, time: '05:00', restartAfter: true },
+    announcements: { enabled: false, intervalMinutes: 30, messages: [] },
     discord: defaultDiscord(),
     chatFilter: { enabled: false, keywords: [], notifyDiscord: true },
     autoUpdate: false,
@@ -186,6 +189,9 @@ export function normalizeServer(input, existing = null) {
   merged.startedAtOverride = normalizeTimestamp(merged.startedAtOverride);
   merged.wipeSchedule = normalizeWipeSchedule(merged.wipeSchedule, merged.mode);
   merged.backupSchedule = normalizeBackupSchedule(merged.backupSchedule, merged.mode);
+  merged.restartSchedule = normalizeRestartSchedule(merged.restartSchedule, merged.mode);
+  merged.updateSchedule = normalizeUpdateSchedule(merged.updateSchedule, merged.mode);
+  merged.announcements = normalizeAnnouncements(input.announcements, existing?.announcements ?? merged.announcements);
   merged.discord = normalizeDiscord(input.discord, existing?.discord ?? merged.discord);
   merged.chatFilter = normalizeChatFilter(input.chatFilter, existing?.chatFilter ?? merged.chatFilter);
 
@@ -245,8 +251,77 @@ function normalizeBackupSchedule(value, mode) {
   return schedule;
 }
 
-export function normalizeChatFilter(value, current = null) {
-  const base = current ?? { enabled: false, keywords: [], notifyDiscord: true };
+function normalizeRestartSchedule(value, mode) {
+  const defaults = { enabled: false, time: '06:00', onlyIfEmpty: false };
+  const schedule = { ...defaults, ...(value && typeof value === 'object' ? value : {}) };
+  schedule.enabled = Boolean(schedule.enabled);
+  schedule.time = String(schedule.time ?? '');
+  if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(schedule.time)) {
+    throw new ValidationError('restartSchedule.time deve estar no formato HH:mm.');
+  }
+  schedule.onlyIfEmpty = Boolean(schedule.onlyIfEmpty);
+  if (schedule.enabled && mode === 'remote') {
+    throw new ValidationError('Reinício agendado está disponível apenas para servidores locais.');
+  }
+  return schedule;
+}
+
+function normalizeUpdateSchedule(value, mode) {
+  const defaults = { enabled: false, time: '05:00', restartAfter: true };
+  const schedule = { ...defaults, ...(value && typeof value === 'object' ? value : {}) };
+  schedule.enabled = Boolean(schedule.enabled);
+  schedule.time = String(schedule.time ?? '');
+  if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(schedule.time)) {
+    throw new ValidationError('updateSchedule.time deve estar no formato HH:mm.');
+  }
+  schedule.restartAfter = Boolean(schedule.restartAfter);
+  if (schedule.enabled && mode === 'remote') {
+    throw new ValidationError('Atualização agendada está disponível apenas para servidores locais.');
+  }
+  return schedule;
+}
+
+export function normalizeAnnouncements(value, current = null) {
+  const base = {
+    enabled: false,
+    intervalMinutes: 30,
+    messages: [],
+    ...(current && typeof current === 'object' ? current : {}),
+  };
+  const input = value && typeof value === 'object' ? value : {};
+  const announcements = {
+    enabled: input.enabled === undefined ? Boolean(base.enabled) : Boolean(input.enabled),
+    intervalMinutes:
+      input.intervalMinutes === undefined ? base.intervalMinutes : input.intervalMinutes,
+    messages: Array.isArray(input.messages)
+      ? input.messages
+      : Array.isArray(base.messages)
+        ? base.messages
+        : [],
+  };
+  announcements.intervalMinutes = clampInt(
+    announcements.intervalMinutes,
+    1,
+    1440,
+    'announcements.intervalMinutes',
+  );
+  const messages = [];
+  for (const item of announcements.messages) {
+    const text = String(item ?? '')
+      .replace(/[\r\n]+/g, ' ')
+      .trim()
+      .slice(0, 200);
+    if (text) messages.push(text);
+    if (messages.length >= 20) break;
+  }
+  announcements.messages = messages;
+  if (announcements.enabled && messages.length === 0) {
+    throw new ValidationError('Adicione ao menos uma mensagem para ativar os anúncios automáticos.');
+  }
+  return announcements;
+}
+
+export function normalizeChatFilter(value, current = null) {  const base = current ?? { enabled: false, keywords: [], notifyDiscord: true };
   const input = value && typeof value === 'object' ? value : {};
   const filter = {
     enabled: input.enabled === undefined ? Boolean(base.enabled) : Boolean(input.enabled),

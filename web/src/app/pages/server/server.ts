@@ -5,11 +5,11 @@ import { Subscription } from 'rxjs';
 import { ApiService } from '../../core/api.service';
 import { readError } from '../../core/auth.service';
 import { EventsService } from '../../core/events.service';
-import { Backup, BackupSchedule, ChatFilter, ChatMessage, DiscordEvents, ConfigField, LogEntry, ModerationEntry, OxidePlugin, OxidePluginConfig, OxideStatus, Player, PlayerAction, PlayerDetail, PlayersResponse, SamplesResponse, Sample, Server, ServerConfig, ServerState, WipeSchedule } from '../../core/models';
+import { Backup, BackupSchedule, ChatFilter, ChatMessage, DiscordEvents, ConfigField, LogEntry, ModerationEntry, OxidePlugin, OxidePluginConfig, OxideStatus, Player, PlayerAction, PlayerDetail, PlayersResponse, SamplesResponse, Sample, Server, ServerConfig, ServerState, WipeSchedule, RestartSchedule, UpdateSchedule, Announcements } from '../../core/models';
 import { I18nService } from '../../core/i18n.service';
 import { TPipe } from '../../shared/t.pipe';
 
-type Tab = 'console' | 'players' | 'chat' | 'config' | 'metrics' | 'plugins' | 'backups' | 'settings';
+type Tab = 'console' | 'players' | 'chat' | 'config' | 'metrics' | 'plugins' | 'backups' | 'automation' | 'settings';
 type MetricsRange = '24h' | '7d' | '30d';
 
 interface ChartSeries {
@@ -83,6 +83,9 @@ export class ServerPage implements OnInit, OnDestroy {
   readonly chatFilterText = signal('');
   readonly chatFilterSaving = signal(false);
 
+  readonly announceBusy = signal(false);
+  readonly announcementDraft = signal('');
+
   private readonly chartW = 600;
   private readonly chartH = 140;
   private readonly chartPad = 2;
@@ -104,6 +107,9 @@ export class ServerPage implements OnInit, OnDestroy {
     autoRestart: true,
     wipeSchedule: { enabled: false, dayOfMonth: 1, time: '04:00', type: 'map', rotateSeed: false } as WipeSchedule,
     backupSchedule: { enabled: false, time: '03:00', keep: 7 } as BackupSchedule,
+    restartSchedule: { enabled: false, time: '06:00', onlyIfEmpty: false } as RestartSchedule,
+    updateSchedule: { enabled: false, time: '05:00', restartAfter: true } as UpdateSchedule,
+    announcements: { enabled: false, intervalMinutes: 30, messages: [] } as Announcements,
     discordEnabled: false,
     discordWebhook: '',
     discordEvents: { online: true, offline: true, crash: true, wipe: true, backup: false } as DiscordEvents,
@@ -171,6 +177,9 @@ export class ServerPage implements OnInit, OnDestroy {
           autoRestart: server.autoRestart,
           wipeSchedule: { ...server.wipeSchedule },
           backupSchedule: { ...server.backupSchedule },
+          restartSchedule: { ...server.restartSchedule },
+          updateSchedule: { ...server.updateSchedule },
+          announcements: { ...server.announcements, messages: [...server.announcements.messages] },
           discordEnabled: server.discord.enabled,
           discordWebhook: '',
           discordEvents: { ...server.discord.events },
@@ -718,6 +727,36 @@ export class ServerPage implements OnInit, OnDestroy {
     });
   }
 
+  addAnnouncementMessage(): void {
+    const text = this.announcementDraft().replace(/[\r\n]+/g, ' ').trim().slice(0, 200);
+    if (!text) return;
+    if (this.settings.announcements.messages.length >= 20) {
+      this.error.set('O limite é de 20 mensagens por servidor.');
+      return;
+    }
+    this.settings.announcements.messages.push(text);
+    this.announcementDraft.set('');
+  }
+
+  removeAnnouncementMessage(index: number): void {
+    this.settings.announcements.messages.splice(index, 1);
+  }
+
+  sendAnnouncementNow(): void {
+    this.announceBusy.set(true);
+    const message = this.announcementDraft().trim();
+    this.api.announce(this.id, message || undefined).subscribe({
+      next: (result) => {
+        this.announceBusy.set(false);
+        this.notice.set(`Anúncio enviado: ${result.message}`);
+      },
+      error: (err) => {
+        this.announceBusy.set(false);
+        this.error.set(readError(err, 'Falha ao enviar anúncio.'));
+      },
+    });
+  }
+
   saveSettings(): void {
     this.busy.set(true);
     const payload: Partial<Server> = {
@@ -741,6 +780,18 @@ export class ServerPage implements OnInit, OnDestroy {
       backupSchedule: {
         ...this.settings.backupSchedule,
         enabled: this.settings.mode === 'remote' ? false : this.settings.backupSchedule.enabled,
+      },
+      restartSchedule: {
+        ...this.settings.restartSchedule,
+        enabled: this.settings.mode === 'remote' ? false : this.settings.restartSchedule.enabled,
+      },
+      updateSchedule: {
+        ...this.settings.updateSchedule,
+        enabled: this.settings.mode === 'remote' ? false : this.settings.updateSchedule.enabled,
+      },
+      announcements: {
+        ...this.settings.announcements,
+        messages: [...this.settings.announcements.messages],
       },
     };
     payload.discord = {

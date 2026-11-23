@@ -169,6 +169,7 @@ POST   /api/servers/:id/stop
 POST   /api/servers/:id/restart      { skipUpdate? }
 POST   /api/servers/:id/update
 POST   /api/servers/:id/command      { command }
+POST   /api/servers/:id/announce     { message? } envia anúncio agora (rotação se omitido)
 
 GET    /api/servers/:id/logs?limit=
 GET    /api/servers/:id/config
@@ -233,6 +234,24 @@ kick/ban/mute.
 
 Os dados ficam no SQLite do agente (`players`, `player_sessions`, `moderation`, `chat_messages`)
 e são limitados por servidor para não crescer sem controle.
+
+## Operação automática
+
+A aba **Automação** do servidor concentra o que roda sozinho, sem clique:
+
+- **Reinício agendado** (servidor local): todos os dias no horário escolhido, com aviso no jogo
+  aos 10, 5 e 1 minuto. A opção **só reiniciar se não houver jogadores online** pula o horário
+  quando alguém está jogando. Se houver wipe ou atualização em andamento, o reinício é ignorado
+  naquele dia em vez de disputar a operação.
+- **Atualização agendada** (servidor local): para o servidor, roda o SteamCMD, reinstala o Oxide
+  quando ele está instalado e, se **ligar de novo depois de atualizar** estiver marcado, sobe o
+  servidor outra vez. Nunca roda junto com um wipe.
+- **Anúncios recorrentes**: mensagens enviadas via `say` a cada N minutos (1 a 1440), em rotação,
+  até 20 mensagens de 200 caracteres. Funciona também em servidor remoto, porque usa só o RCON.
+  O botão **Enviar agora** dispara a próxima mensagem da rotação ou o texto digitado no campo.
+
+O status do servidor expõe `nextRestartAt`, `nextUpdateAt` e `nextAnnouncementAt`, e o painel
+mostra a próxima execução de cada um. Os horários usam o fuso local da máquina do agente.
 
 ## Duas formas de cadastrar um servidor
 
@@ -487,13 +506,16 @@ Cobre normalização de config, roundtrip do `server.cfg`, scrypt/sessões, clie
 WebSocket falso, ciclo de vida com servidor simulado, grupos e ações em lote, 2FA (TOTP),
 licenciamento (assinatura Ed25519, trial, limite de servidores e modo somente leitura), jogadores
 (sessões, notas, moderação e expiração de ban), chat (parsing, filtro por palavra-chave e histórico
-sinalizado) e um fluxo HTTP completo (setup → login → criar → iniciar → logs → parar).
+sinalizado) e um fluxo HTTP completo (setup → login → criar → iniciar → logs → parar). A operação
+automática cobre os cálculos de horário, a normalização de reinício/atualização/anúncios, a
+validação de modo remoto e o anúncio imediato com rotação contra um RCON falso.
 
 ## Roadmap
 
 - **Fase 2:** ~~alertas no Discord, backup automático, métricas históricas~~ ✔
 - **Fase 3:** ~~plugins Oxide/uMod~~ ✔, ~~multi-servidor avançado (grupos e ações em lote)~~ ✔, ~~2FA (TOTP)~~ ✔, ~~licenciamento~~ ✔
 - **Fase 4:** ~~jogadores e sessões~~ ✔, ~~moderação por RCON (kick/ban/mute)~~ ✔, ~~super usuário (owner/unowner)~~ ✔, ~~chat ao vivo e filtro por palavra-chave~~ ✔, ~~ban sincronizado entre servidores do grupo~~ ✔
+- **Fase 5:** ~~reinício agendado com avisos~~ ✔, ~~atualização agendada~~ ✔, ~~anúncios recorrentes com rotação~~ ✔
 
 > Projeto independente, não afiliado à Facepunch Studios. Não redistribui binários do jogo:
 > apenas automatiza o SteamCMD.

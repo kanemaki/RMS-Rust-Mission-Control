@@ -204,6 +204,12 @@ export class ApiService {
     return this.http.post<{ response: string }>(`/api/servers/${id}/chat`, { message });
   }
 
+  announce(id: string, message?: string): Observable<{ message: string; response: string }> {
+    return this.http.post<{ message: string; response: string }>(`/api/servers/${id}/announce`, {
+      ...(message ? { message } : {}),
+    });
+  }
+
   chatFilter(id: string): Observable<ChatFilter> {
     return this.http.get<ChatFilter>(`/api/servers/${id}/chat-filter`);
   }

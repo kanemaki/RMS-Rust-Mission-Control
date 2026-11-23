@@ -19,6 +19,9 @@ export interface ServerStatus {
   autoUpdate: boolean;
   nextWipeAt?: number | null;
   nextBackupAt?: number | null;
+  nextRestartAt?: number | null;
+  nextUpdateAt?: number | null;
+  nextAnnouncementAt?: number | null;
   install: { installed: boolean; executable: string; steamCmd: boolean } | null;
 }
 
@@ -34,6 +37,24 @@ export interface BackupSchedule {
   enabled: boolean;
   time: string;
   keep: number;
+}
+
+export interface RestartSchedule {
+  enabled: boolean;
+  time: string;
+  onlyIfEmpty: boolean;
+}
+
+export interface UpdateSchedule {
+  enabled: boolean;
+  time: string;
+  restartAfter: boolean;
+}
+
+export interface Announcements {
+  enabled: boolean;
+  intervalMinutes: number;
+  messages: string[];
 }
 
 export interface DiscordEvents {
@@ -166,6 +187,9 @@ export interface Server {
   startedAtOverride: number | null;
   wipeSchedule: WipeSchedule;
   backupSchedule: BackupSchedule;
+  restartSchedule: RestartSchedule;
+  updateSchedule: UpdateSchedule;
+  announcements: Announcements;
   discord: DiscordSettings;
   chatFilter: ChatFilter;
   autoUpdate: boolean;
