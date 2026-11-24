@@ -29,6 +29,3 @@ agent/daemon/
 *.tsbuildinfo
 .DS_Store
 Thumbs.db
-
-# Documentacao
-docs/
