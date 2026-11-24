@@ -55,6 +55,7 @@ function defaultServer(detected = detectInstall()) {
     discord: defaultDiscord(),
     chatFilter: { enabled: false, keywords: [], notifyDiscord: true },
     insights: { inactiveDays: 14 },
+    liveMap: { enabled: false, token: null, intervalSeconds: 5 },
     autoUpdate: false,
     autoRestart: true,
     extraArgs: [],
@@ -196,6 +197,7 @@ export function normalizeServer(input, existing = null) {
   merged.discord = normalizeDiscord(input.discord, existing?.discord ?? merged.discord);
   merged.chatFilter = normalizeChatFilter(input.chatFilter, existing?.chatFilter ?? merged.chatFilter);
   merged.insights = normalizeInsights(input.insights, existing?.insights ?? merged.insights);
+  merged.liveMap = normalizeLiveMap(input.liveMap, existing?.liveMap ?? merged.liveMap);
 
   merged.extraArgs = Array.isArray(merged.extraArgs)
     ? merged.extraArgs.map((arg) => String(arg)).filter(Boolean)
@@ -352,6 +354,22 @@ export function normalizeInsights(value, current = null) {
   const inactiveDays =
     input.inactiveDays === undefined ? Number(base.inactiveDays) || 14 : Number(input.inactiveDays);
   return { inactiveDays: clampInt(inactiveDays, 1, 365, 'insights.inactiveDays') };
+}
+
+export function normalizeLiveMap(value, current = null) {
+  const base = current ?? { enabled: false, token: null, intervalSeconds: 5 };
+  const input = value && typeof value === 'object' ? value : {};
+  const token = input.token === undefined ? base.token : input.token;
+  if (token !== null && (typeof token !== 'string' || !/^[A-Za-z0-9_-]{16,128}$/.test(token))) {
+    throw new ValidationError('liveMap.token inválido.');
+  }
+  const intervalSeconds =
+    input.intervalSeconds === undefined ? Number(base.intervalSeconds) || 5 : Number(input.intervalSeconds);
+  return {
+    enabled: input.enabled === undefined ? Boolean(base.enabled) : Boolean(input.enabled),
+    token: token ?? null,
+    intervalSeconds: clampInt(intervalSeconds, 1, 60, 'liveMap.intervalSeconds'),
+  };
 }
 
 function normalizeDiscord(value, current) {

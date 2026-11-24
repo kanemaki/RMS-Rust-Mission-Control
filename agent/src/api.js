@@ -20,6 +20,17 @@ import { logBus } from './logbus.js';
 import { closeSessions, getPlayer, listModeration, listPlayers, normalizeSteamId, setPlayerNote } from './players.js';
 import { playerStats, playersCsv, serverInsights, sessionsCsv } from './insights.js';
 import { listChat } from './chat.js';
+import { mapMeta, mapPng } from './worldmap.js';
+import {
+  clearPositions,
+  ensureLiveToken,
+  ingestPositions,
+  installLivePlugin,
+  liveState,
+  pluginStatus,
+  removeLivePlugin,
+  rotateLiveToken,
+} from './livemap.js';
 import { readConfig, writeConfig, launchPatch, validateValues, withoutSecrets } from './cfg.js';
 import { createBackup, deleteBackup, listBackups, restoreBackup } from './backups.js';
 import { audit, auditContext, listAudit, listSamples, listSamplesRange } from './db.js';
@@ -86,8 +97,9 @@ import {
 } from './auth.js';
 import QRCode from 'qrcode';
 
-export function createApi({ secureCookies = false, version = '0.1.0' } = {}) {
+export function createApi({ secureCookies = false, version = '0.1.0', port = 8090 } = {}) {
   const router = express.Router();
+  const agentUrl = `http://127.0.0.1:${port}`;
 
   router.get('/health', (req, res) => {
     res.json({ ok: true, version, uptimeMs: Math.round(process.uptime() * 1000) });
@@ -167,6 +179,13 @@ export function createApi({ secureCookies = false, version = '0.1.0' } = {}) {
       expiresAt: req.session.expiresAt,
       totpEnabled: totpEnabled(req.session.userId),
     });
+  });
+
+  // Ingestão do plugin companion: autenticada por token do servidor, não por sessão.
+  router.post('/ingest/positions', (req, res) => {
+    const token = req.get('x-rmc-token') ?? req.body?.token;
+    const result = ingestPositions({ token, players: req.body?.players });
+    res.json({ ok: true, ...result });
   });
 
   router.use(requireAuth);
@@ -618,6 +637,76 @@ export function createApi({ secureCookies = false, version = '0.1.0' } = {}) {
       ip: req.ip,
     });
     res.json(updated?.chatFilter ?? filter);
+  });
+
+  router.get('/servers/:id/map', (req, res) => {
+    const server = requireServer(req, res);
+    if (!server) return;
+    res.json(mapMeta(server));
+  });
+
+  router.get('/servers/:id/map.png', (req, res) => {
+    const server = requireServer(req, res);
+    if (!server) return;
+    const { buffer, meta } = mapPng(server);
+    res.setHeader('Content-Type', 'image/png');
+    res.setHeader('Cache-Control', 'private, max-age=3600');
+    res.setHeader('ETag', `"${meta.mtime}-${meta.size}"`);
+    res.send(buffer);
+  });
+
+  router.get('/servers/:id/live', (req, res) => {
+    const server = requireServer(req, res);
+    if (!server) return;
+    res.json({ ...liveState(server.id), plugin: pluginStatus(server) });
+  });
+
+  router.get('/servers/:id/live/plugin', (req, res) => {
+    const server = requireServer(req, res);
+    if (!server) return;
+    res.json({ ...pluginStatus(server), agentUrl });
+  });
+
+  router.post('/servers/:id/live/plugin', requireWritable, localOnly, (req, res) => {
+    const server = requireServer(req, res);
+    if (!server) return;
+    const status = installLivePlugin(server, {
+      agentUrl: req.body?.agentUrl || agentUrl,
+      intervalSeconds: req.body?.intervalSeconds ?? server.liveMap?.intervalSeconds,
+    });
+    audit('live_plugin_install', { serverId: server.id, detail: status.path, ip: req.ip });
+    res.status(201).json({ ...status, agentUrl: req.body?.agentUrl || agentUrl });
+  });
+
+  router.delete('/servers/:id/live/plugin', requireWritable, localOnly, (req, res) => {
+    const server = requireServer(req, res);
+    if (!server) return;
+    const status = removeLivePlugin(server);
+    audit('live_plugin_remove', { serverId: server.id, detail: status.path, ip: req.ip });
+    res.json(status);
+  });
+
+  router.post('/servers/:id/live/token', requireWritable, (req, res) => {
+    const server = requireServer(req, res);
+    if (!server) return;
+    const token = rotateLiveToken(server.id);
+    const current = findServer(server.id);
+    // Plugin já instalado recebe o token novo na hora; sem isso ele para de autenticar.
+    if (pluginStatus(current).installed) {
+      installLivePlugin(current, {
+        agentUrl,
+        intervalSeconds: current.liveMap?.intervalSeconds,
+      });
+    }
+    audit('live_token_rotate', { serverId: server.id, ip: req.ip });
+    res.json({ token, plugin: pluginStatus(findServer(server.id)) });
+  });
+
+  router.delete('/servers/:id/live', requireWritable, (req, res) => {
+    const server = requireServer(req, res);
+    if (!server) return;
+    clearPositions(server.id);
+    res.json({ ok: true });
   });
 
   router.get('/servers/:id/insights', (req, res) => {

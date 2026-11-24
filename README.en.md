@@ -205,6 +205,16 @@ GET    /api/servers/:id/insights?days=30    playtime, heatmap, ranking and reten
 GET    /api/servers/:id/export/players.csv  players as CSV
 GET    /api/servers/:id/export/sessions.csv sessions as CSV
 
+GET    /api/servers/:id/map                 .map metadata (seed, size, resolution)
+GET    /api/servers/:id/map.png             terrain rendered as PNG
+GET    /api/servers/:id/live                current positions and plugin status
+GET    /api/servers/:id/live/plugin         companion plugin status
+POST   /api/servers/:id/live/plugin         installs/reinstalls the plugin (local server)
+DELETE /api/servers/:id/live/plugin         removes the plugin
+POST   /api/servers/:id/live/token          rotates the ingest token
+DELETE /api/servers/:id/live                clears the in-memory positions
+POST   /api/ingest/positions                plugin ingest (x-rmc-token header)
+
 GET    /api/servers/:id/oxide               Oxide status and plugin count
 POST   /api/servers/:id/oxide/install      installs/updates Oxide (server stopped)
 GET    /api/servers/:id/oxide/plugins
@@ -215,7 +225,7 @@ PUT    /api/servers/:id/oxide/plugins/:name/config       { raw }
 POST   /api/servers/:id/oxide/plugins/:name/load|unload|reload
 
 GET    /api/audit?limit=
-GET    /api/events                   SSE (status + logs + chat)
+GET    /api/events                   SSE (status + logs + chat + positions)
 ```
 
 The batch endpoint (`/api/servers/batch`) runs the action in parallel and returns a per-server result
@@ -282,6 +292,27 @@ The **Insights** tab turns the sessions already stored into numbers, with no new
 Optional Discord alerts: `player_new` (first join), `player_inactive` (gone for N days, checked
 every 6 hours) and `peak` (new record of players online at the same time). All are off by default
 and are enabled in **Settings → Discord**.
+
+## Live map
+
+The **Map** tab shows the server terrain and, when the companion plugin is installed, the
+position of every online player.
+
+- **Offline render**: the agent reads the `.map` from the save folder, extracts the `terrain`
+  layer (2049×2049 `uint16` for a 3000 world) and produces a 1024×1024 PNG with `node:zlib`,
+  with no new dependency and no internet. The PNG lives in `data/cache/maps` and is invalidated
+  by the `.map` mtime. Remote servers have no local file and show the matching notice.
+- **Companion plugin**: **Install plugin** writes `RmsLiveMap.cs` into the server
+  `Oxide/plugins` folder with the agent URL and a per-server token already embedded. The plugin
+  posts `{steamId, name, x, y, z, rot, hp}` every N seconds (1 to 60, default 5) to
+  `POST /api/ingest/positions`. Restart the server to load the plugin.
+- **Token and security**: ingest uses the `x-rmc-token` header, compares the token in constant
+  time, limits to 240 batches per minute and drops coordinates outside the world bounds.
+  **Rotate token** invalidates the current plugin until it is reinstalled. The panel shows the
+  token masked.
+- **Panel**: markers with name and HP, zoom from 1× to 8×, drag to pan, **Center** button, side
+  list of players and SSE updates (`positions`). `viewer` can read the map but cannot install,
+  remove or rotate anything.
 
 ## Two ways to register a server
 
@@ -559,7 +590,9 @@ the restart/update/announcement normalization, the remote-mode validation and th
 announcement with rotation against a fake RCON. Player intelligence covers playtime, the heatmap by
 local hour, ranking, retention, inactive players and CSV export. Multi-user covers the migration of
 the legacy credential, user creation and roles, the last-owner protections, closing sessions when a
-user is disabled or their password changes, per-user 2FA and the audit actor.
+user is disabled or their password changes, per-user 2FA and the audit actor. The live map covers
+the `.map` parser, PNG encoding, the disk cache, ingest with a valid/invalid token, bounds, the
+rate limit and the companion plugin lifecycle.
 
 ## Roadmap
 
@@ -569,6 +602,7 @@ user is disabled or their password changes, per-user 2FA and the audit actor.
 - **Phase 5:** ~~scheduled restart with warnings~~ ✔, ~~scheduled update~~ ✔, ~~recurring announcements with rotation~~ ✔
 - **Phase 6:** ~~playtime and activity heatmap~~ ✔, ~~ranking and retention~~ ✔, ~~enriched player profile~~ ✔, ~~new/inactive/peak player alerts~~ ✔, ~~CSV export~~ ✔
 - **Phase 7:** ~~users in SQLite with per-user scrypt~~ ✔, ~~owner/admin/viewer roles~~ ✔, ~~session bound to the user~~ ✔, ~~per-user 2FA with owner reset~~ ✔, ~~users screen~~ ✔, ~~audit with actor~~ ✔, ~~legacy credential migration~~ ✔
+- **Phase 8:** ~~offline `.map` render to PNG~~ ✔, ~~Oxide companion plugin~~ ✔, ~~Map tab with zoom, pan and SSE~~ ✔, ~~per-server ingest token~~ ✔, ~~parser, PNG and ingest tests~~ ✔
 
 > Independent project, not affiliated with Facepunch Studios. Does not redistribute game binaries:
 > it only automates SteamCMD.

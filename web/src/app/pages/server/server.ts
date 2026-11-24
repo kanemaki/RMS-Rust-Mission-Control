@@ -5,11 +5,11 @@ import { Subscription } from 'rxjs';
 import { ApiService } from '../../core/api.service';
 import { AuthService, readError } from '../../core/auth.service';
 import { EventsService } from '../../core/events.service';
-import { Backup, BackupSchedule, ChatFilter, ChatMessage, DiscordEvents, ConfigField, InsightsResponse, LogEntry, ModerationEntry, OxidePlugin, OxidePluginConfig, OxideStatus, Player, PlayerAction, PlayerDetail, PlayersResponse, SamplesResponse, Sample, Server, ServerConfig, ServerState, WipeSchedule, RestartSchedule, UpdateSchedule, Announcements } from '../../core/models';
+import { Backup, BackupSchedule, ChatFilter, ChatMessage, DiscordEvents, ConfigField, InsightsResponse, LiveMapState, LivePluginStatus, LogEntry, MapMeta, ModerationEntry, OxidePlugin, OxidePluginConfig, OxideStatus, Player, PlayerAction, PlayerDetail, PlayersResponse, SamplesResponse, Sample, Server, ServerConfig, ServerState, WipeSchedule, RestartSchedule, UpdateSchedule, Announcements } from '../../core/models';
 import { I18nService } from '../../core/i18n.service';
 import { TPipe } from '../../shared/t.pipe';
 
-type Tab = 'console' | 'players' | 'chat' | 'insights' | 'config' | 'metrics' | 'plugins' | 'backups' | 'automation' | 'settings';
+type Tab = 'console' | 'players' | 'chat' | 'insights' | 'map' | 'config' | 'metrics' | 'plugins' | 'backups' | 'automation' | 'settings';
 type MetricsRange = '24h' | '7d' | '30d';
 
 interface ChartSeries {
@@ -93,6 +93,15 @@ export class ServerPage implements OnInit, OnDestroy {
   readonly insightsLoading = signal(false);
   readonly insightRanges = [7, 30, 90];
 
+  readonly mapMeta = signal<MapMeta | null>(null);
+  readonly liveMap = signal<LiveMapState | null>(null);
+  readonly livePlugin = signal<LivePluginStatus | null>(null);
+  readonly mapBusy = signal<string | null>(null);
+  readonly mapZoom = signal(1);
+  readonly mapPan = signal({ x: 0, y: 0 });
+  readonly mapInterval = signal(5);
+  private mapDrag: { x: number; y: number; panX: number; panY: number } | null = null;
+
   private readonly chartW = 600;
   private readonly chartH = 140;
   private readonly chartPad = 2;
@@ -150,6 +159,9 @@ export class ServerPage implements OnInit, OnDestroy {
       }
       if (event.type === 'chat' && event.serverId === this.id) {
         this.chat.update((list) => [...list.slice(-499), event.entry]);
+      }
+      if (event.type === 'positions' && event.serverId === this.id) {
+        this.liveMap.set(event.state);
       }
     });
     this.load();
@@ -211,6 +223,98 @@ export class ServerPage implements OnInit, OnDestroy {
     if (tab === 'players') this.loadPlayers();
     if (tab === 'chat') this.loadChat();
     if (tab === 'insights') this.loadInsights();
+    if (tab === 'map') this.loadMap();
+  }
+
+  loadMap(): void {
+    this.api.mapMeta(this.id).subscribe({ next: (meta) => this.mapMeta.set(meta) });
+    this.api.liveMap(this.id).subscribe({
+      next: (state) => {
+        this.liveMap.set(state);
+        if (state.plugin) {
+          this.livePlugin.set(state.plugin);
+          this.mapInterval.set(state.plugin.intervalSeconds);
+        }
+      },
+    });
+    this.api.livePlugin(this.id).subscribe({ next: (plugin) => this.livePlugin.set(plugin) });
+  }
+
+  installLivePlugin(): void {
+    if (!confirm(this.i18n.t('map.confirmInstall'))) return;
+    this.mapBusy.set('plugin');
+    this.api.installLivePlugin(this.id, this.mapInterval()).subscribe({
+      next: (plugin) => {
+        this.mapBusy.set(null);
+        this.livePlugin.set(plugin);
+        this.notice.set(this.i18n.t('map.installedNotice'));
+      },
+      error: (err) => {
+        this.mapBusy.set(null);
+        this.error.set(readError(err, this.i18n.t('map.installFailed')));
+      },
+    });
+  }
+
+  removeLivePlugin(): void {
+    if (!confirm(this.i18n.t('map.confirmRemove'))) return;
+    this.mapBusy.set('plugin');
+    this.api.removeLivePlugin(this.id).subscribe({
+      next: (plugin) => {
+        this.mapBusy.set(null);
+        this.livePlugin.set(plugin);
+        this.notice.set(this.i18n.t('map.removedNotice'));
+      },
+      error: (err) => {
+        this.mapBusy.set(null);
+        this.error.set(readError(err, this.i18n.t('map.removeFailed')));
+      },
+    });
+  }
+
+  rotateLiveToken(): void {
+    if (!confirm(this.i18n.t('map.confirmRotate'))) return;
+    this.mapBusy.set('token');
+    this.api.rotateLiveToken(this.id).subscribe({
+      next: (result) => {
+        this.mapBusy.set(null);
+        this.livePlugin.set(result.plugin);
+        this.notice.set(this.i18n.t('map.rotatedNotice'));
+      },
+      error: (err) => {
+        this.mapBusy.set(null);
+        this.error.set(readError(err, this.i18n.t('map.rotateFailed')));
+      },
+    });
+  }
+
+  zoomMap(delta: number): void {
+    this.mapZoom.update((zoom) => Math.min(8, Math.max(1, Math.round((zoom + delta) * 10) / 10)));
+    if (this.mapZoom() === 1) this.mapPan.set({ x: 0, y: 0 });
+  }
+
+  resetMap(): void {
+    this.mapZoom.set(1);
+    this.mapPan.set({ x: 0, y: 0 });
+  }
+
+  startMapDrag(event: PointerEvent): void {
+    if (this.mapZoom() === 1) return;
+    const pan = this.mapPan();
+    this.mapDrag = { x: event.clientX, y: event.clientY, panX: pan.x, panY: pan.y };
+    (event.target as HTMLElement).setPointerCapture?.(event.pointerId);
+  }
+
+  moveMapDrag(event: PointerEvent): void {
+    if (!this.mapDrag) return;
+    this.mapPan.set({
+      x: this.mapDrag.panX + (event.clientX - this.mapDrag.x),
+      y: this.mapDrag.panY + (event.clientY - this.mapDrag.y),
+    });
+  }
+
+  endMapDrag(): void {
+    this.mapDrag = null;
   }
 
   loadOxide(): void {
@@ -506,6 +610,15 @@ export class ServerPage implements OnInit, OnDestroy {
 
   exportUrl(kind: 'players' | 'sessions'): string {
     return this.api.exportUrl(this.id, kind);
+  }
+
+  mapPngUrl(): string {
+    return this.api.mapPngUrl(this.id);
+  }
+
+  maskToken(token: string | null | undefined): string {
+    if (!token) return '—';
+    return `••••${token.slice(-4)}`;
   }
 
   loadInsights(): void {

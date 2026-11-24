@@ -33,7 +33,7 @@ app.use('/api/servers/:id/oxide/plugins', express.json({ limit: '3mb' }));
 app.use(express.json({ limit: '256kb' }));
 
 const secureCookies = process.env.RMC_SECURE_COOKIES === '1';
-app.use('/api', createApi({ secureCookies, version: VERSION }));
+app.use('/api', createApi({ secureCookies, version: VERSION, port: PORT }));
 
 if (fs.existsSync(publicDir)) {
   app.use(

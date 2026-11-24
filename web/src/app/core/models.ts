@@ -387,7 +387,54 @@ export type StreamEvent =
   | { type: 'hello'; servers: ServerStatus[] }
   | { type: 'status'; serverId: string; status: ServerStatus }
   | { type: 'log'; serverId: string; entry: LogEntry }
-  | { type: 'chat'; serverId: string; entry: ChatMessage };
+  | { type: 'chat'; serverId: string; entry: ChatMessage }
+  | { type: 'positions'; serverId: string; state: LiveMapState };
+
+export interface MapMeta {
+  available: boolean;
+  reason?: 'remote' | 'missing';
+  file?: string;
+  bytes?: number;
+  mtime?: number;
+  seed: number | null;
+  worldSize: number | null;
+  resolution?: number;
+  size?: number;
+  layers?: string[];
+  bounds?: { min: number; max: number };
+}
+
+export interface LivePlayer {
+  steamId: string;
+  name: string;
+  x: number;
+  y: number;
+  z: number;
+  rot: number;
+  hp: number | null;
+  mx: number;
+  my: number;
+}
+
+export interface LivePluginStatus {
+  installed: boolean;
+  enabled: boolean;
+  oxide: boolean;
+  token: string | null;
+  intervalSeconds: number;
+  path: string;
+  agentUrl?: string;
+}
+
+export interface LiveMapState {
+  serverId: string;
+  worldSize: number;
+  at: number | null;
+  ageMs: number | null;
+  stale: boolean;
+  players: LivePlayer[];
+  plugin?: LivePluginStatus;
+}
 
 export interface TotpStatus {
   enabled: boolean;

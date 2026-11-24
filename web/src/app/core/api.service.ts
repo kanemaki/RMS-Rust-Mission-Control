@@ -12,7 +12,10 @@ import {
   InsightsResponse,
   InstallScan,
   LicenseStatus,
+  LiveMapState,
+  LivePluginStatus,
   LogEntry,
+  MapMeta,
   ModerationEntry,
   ModerationResponse,
   OxidePlugin,
@@ -242,6 +245,34 @@ export class ApiService {
     return this.http.get<InsightsResponse>(`/api/servers/${id}/insights`, {
       params: { days: String(days), ...(inactiveDays ? { inactiveDays: String(inactiveDays) } : {}) },
     });
+  }
+
+  mapMeta(id: string): Observable<MapMeta> {
+    return this.http.get<MapMeta>(`/api/servers/${id}/map`);
+  }
+
+  mapPngUrl(id: string): string {
+    return `/api/servers/${id}/map.png`;
+  }
+
+  liveMap(id: string): Observable<LiveMapState> {
+    return this.http.get<LiveMapState>(`/api/servers/${id}/live`);
+  }
+
+  livePlugin(id: string): Observable<LivePluginStatus> {
+    return this.http.get<LivePluginStatus>(`/api/servers/${id}/live/plugin`);
+  }
+
+  installLivePlugin(id: string, intervalSeconds: number): Observable<LivePluginStatus> {
+    return this.http.post<LivePluginStatus>(`/api/servers/${id}/live/plugin`, { intervalSeconds });
+  }
+
+  removeLivePlugin(id: string): Observable<LivePluginStatus> {
+    return this.http.delete<LivePluginStatus>(`/api/servers/${id}/live/plugin`);
+  }
+
+  rotateLiveToken(id: string): Observable<{ token: string; plugin: LivePluginStatus }> {
+    return this.http.post<{ token: string; plugin: LivePluginStatus }>(`/api/servers/${id}/live/token`, {});
   }
 
   exportUrl(id: string, kind: 'players' | 'sessions'): string {

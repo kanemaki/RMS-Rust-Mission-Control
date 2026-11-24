@@ -76,6 +76,9 @@
     <button type="button" [class.active]="tab() === 'insights'" (click)="setTab('insights')">
       {{ 'server.tab.insights' | t }}
     </button>
+    <button type="button" [class.active]="tab() === 'map'" (click)="setTab('map')">
+      {{ 'server.tab.map' | t }}
+    </button>
     @if (!isRemote()) {
       <button type="button" [class.active]="tab() === 'config'" (click)="setTab('config')">server.cfg</button>
       <button type="button" [class.active]="tab() === 'metrics'" (click)="setTab('metrics')">
@@ -579,6 +582,132 @@
           </div>
         } @else {
           <div class="empty">{{ 'insights.empty' | t }}</div>
+        }
+      </section>
+    }
+
+    @case ('map') {
+      <section class="panel map-panel">
+        <div class="panel-head">
+          <div>
+            <h2>{{ 'map.title' | t }}</h2>
+            <p class="muted small">{{ 'map.subtitle' | t }}</p>
+          </div>
+          <div class="map-tools">
+            <button type="button" class="btn sm ghost" (click)="zoomMap(-0.5)" [disabled]="mapZoom() <= 1">−</button>
+            <button type="button" class="btn sm ghost" (click)="resetMap()">{{ 'map.reset' | t }}</button>
+            <button type="button" class="btn sm ghost" (click)="zoomMap(0.5)" [disabled]="mapZoom() >= 8">+</button>
+          </div>
+        </div>
+
+        @if (mapMeta(); as meta) {
+          @if (!meta.available) {
+            <div class="empty">{{ (meta.reason === 'remote' ? 'map.remote' : 'map.missing') | t }}</div>
+          } @else {
+            <div class="map-layout">
+              <div
+                class="map-viewport"
+                (pointerdown)="startMapDrag($event)"
+                (pointermove)="moveMapDrag($event)"
+                (pointerup)="endMapDrag()"
+                (pointercancel)="endMapDrag()"
+              >
+                <div
+                  class="map-canvas"
+                  [style.transform]="'translate(' + mapPan().x + 'px,' + mapPan().y + 'px) scale(' + mapZoom() + ')'"
+                  [style.--zoom]="mapZoom()"
+                >
+                  <img [src]="mapPngUrl()" [alt]="'map.title' | t" draggable="false" />
+                  @for (player of liveMap()?.players ?? []; track player.steamId) {
+                    <span
+                      class="map-marker"
+                      [style.left.%]="player.mx * 100"
+                      [style.top.%]="player.my * 100"
+                      [title]="player.name + ' · ' + player.steamId"
+                    >
+                      <span class="map-dot"></span>
+                      <span class="map-label">{{ player.name }}</span>
+                    </span>
+                  }
+                </div>
+              </div>
+
+              <aside class="map-side">
+                <div class="map-stat">
+                  <span class="muted small">{{ 'map.onMap' | t }}</span>
+                  <strong>{{ liveMap()?.players?.length ?? 0 }}</strong>
+                </div>
+                <div class="map-stat">
+                  <span class="muted small">{{ 'map.updated' | t }}</span>
+                  <strong>
+                    @if (liveMap()?.at) {
+                      {{ liveMap()?.stale ? ('map.stale' | t) : ('map.live' | t) }}
+                    } @else {
+                      {{ 'map.noData' | t }}
+                    }
+                  </strong>
+                </div>
+                <div class="map-stat">
+                  <span class="muted small">{{ 'map.world' | t }}</span>
+                  <strong>{{ meta.worldSize }} · seed {{ meta.seed }}</strong>
+                </div>
+
+                <h3 class="section-title">{{ 'map.players' | t }}</h3>
+                @if (!(liveMap()?.players?.length)) {
+                  <div class="empty">{{ 'map.noPlayers' | t }}</div>
+                } @else {
+                  <ul class="rank-list map-player-list">
+                    @for (player of liveMap()?.players ?? []; track player.steamId) {
+                      <li>
+                        <button class="rank-name" type="button" (click)="openPlayer(player.steamId)">{{ player.name }}</button>
+                        <span class="muted small">{{ player.hp === null ? '—' : player.hp + ' hp' }}</span>
+                      </li>
+                    }
+                  </ul>
+                }
+
+                <div class="map-plugin">
+                  <h3 class="section-title">{{ 'map.plugin' | t }}</h3>
+                  @if (livePlugin(); as plugin) {
+                    <p class="muted small">
+                      {{ (plugin.installed ? 'map.pluginInstalled' : 'map.pluginMissing') | t }}
+                      · token {{ maskToken(plugin.token) }}
+                    </p>
+                    @if (plugin.installed && plugin.oxide === false) {
+                      <p class="pill warn">{{ 'map.oxideMissing' | t }}</p>
+                    }
+                    <label class="field inline">
+                      <span>{{ 'map.interval' | t }}</span>
+                      <input
+                        type="number"
+                        min="1"
+                        max="60"
+                        [ngModel]="mapInterval()"
+                        (ngModelChange)="mapInterval.set(+$event || 5)"
+                      />
+                    </label>
+                    <div class="row-actions">
+                      <button type="button" class="btn sm" [disabled]="mapBusy() === 'plugin'" (click)="installLivePlugin()">
+                        {{ (plugin.installed ? 'map.reinstall' : 'map.install') | t }}
+                      </button>
+                      @if (plugin.installed) {
+                        <button type="button" class="btn sm ghost" [disabled]="mapBusy() === 'plugin'" (click)="removeLivePlugin()">
+                          {{ 'map.remove' | t }}
+                        </button>
+                      }
+                      <button type="button" class="btn sm ghost" [disabled]="mapBusy() === 'token'" (click)="rotateLiveToken()">
+                        {{ 'map.rotate' | t }}
+                      </button>
+                    </div>
+                  } @else {
+                    <div class="empty">{{ 'map.pluginMissing' | t }}</div>
+                  }
+                </div>
+              </aside>
+            </div>
+          }
+        } @else {
+          <div class="loading">{{ 'common.loading' | t }}</div>
         }
       </section>
     }

@@ -202,6 +202,16 @@ GET    /api/servers/:id/insights?days=30    tempo de jogo, heatmap, ranking e re
 GET    /api/servers/:id/export/players.csv  jogadores em CSV
 GET    /api/servers/:id/export/sessions.csv sessões em CSV
 
+GET    /api/servers/:id/map                 metadados do .map (seed, tamanho, resolução)
+GET    /api/servers/:id/map.png             terreno renderizado em PNG
+GET    /api/servers/:id/live                posições atuais e status do plugin
+GET    /api/servers/:id/live/plugin         status do plugin companion
+POST   /api/servers/:id/live/plugin         instala/reinstala o plugin (servidor local)
+DELETE /api/servers/:id/live/plugin         remove o plugin
+POST   /api/servers/:id/live/token          rotaciona o token de ingestão
+DELETE /api/servers/:id/live                limpa as posições em memória
+POST   /api/ingest/positions                ingestão do plugin (header x-rmc-token)
+
 GET    /api/servers/:id/oxide               status do Oxide e contagem de plugins
 POST   /api/servers/:id/oxide/install      instala/atualiza o Oxide (servidor parado)
 GET    /api/servers/:id/oxide/plugins
@@ -212,7 +222,7 @@ PUT    /api/servers/:id/oxide/plugins/:name/config       { raw }
 POST   /api/servers/:id/oxide/plugins/:name/load|unload|reload
 
 GET    /api/audit?limit=
-GET    /api/events                   SSE (status + logs + chat)
+GET    /api/events                   SSE (status + logs + chat + positions)
 ```
 
 O lote (`/api/servers/batch`) executa a ação em paralelo e devolve o resultado por servidor
@@ -280,6 +290,27 @@ A aba **Inteligência** transforma as sessões já gravadas em números, sem tab
 Alertas opcionais no Discord: `player_new` (primeira entrada), `player_inactive` (sumiu há N
 dias, checado a cada 6 horas) e `peak` (novo recorde de jogadores online ao mesmo tempo). Todos
 vêm desligados por padrão e são ligados em **Ajustes → Discord**.
+
+## Mapa ao vivo
+
+A aba **Mapa** mostra o terreno do servidor e, quando o plugin companion está instalado, a
+posição de cada jogador online.
+
+- **Render offline**: o agente lê o `.map` da pasta de saves, extrai a camada `terrain`
+  (2049×2049 `uint16` para um mundo 3000) e gera um PNG 1024×1024 com `node:zlib`, sem
+  dependência nova e sem internet. O PNG fica em `data/cache/maps` e é invalidado pelo mtime
+  do `.map`. Servidores remotos não têm o arquivo local e mostram o aviso correspondente.
+- **Plugin companion**: o botão **Instalar plugin** grava `RmsLiveMap.cs` na pasta
+  `Oxide/plugins` do servidor com a URL do agente e um token por servidor já embutidos. O
+  plugin posta `{steamId, name, x, y, z, rot, hp}` a cada N segundos (1 a 60, padrão 5) em
+  `POST /api/ingest/positions`. Reinicie o servidor para carregar o plugin.
+- **Token e segurança**: a ingestão usa o header `x-rmc-token`, compara o token em tempo
+  constante, limita a 240 lotes por minuto e descarta coordenadas fora dos bounds do mundo.
+  **Rotacionar token** invalida o plugin atual até ele ser reinstalado. O token aparece
+  mascarado no painel.
+- **Painel**: marcadores com nome e HP, zoom de 1× a 8×, arrastar para deslocar, botão
+  **Centralizar**, lista lateral de jogadores e atualização por SSE (`positions`). `viewer`
+  consulta o mapa, mas não instala, remove nem rotaciona nada.
 
 ## Duas formas de cadastrar um servidor
 
@@ -557,7 +588,8 @@ validação de modo remoto e o anúncio imediato com rotação contra um RCON fa
 jogadores cobre tempo de jogo, heatmap por hora local, ranking, retenção, inativos e CSV. O
 multi-usuário cobre a migração da credencial antiga, criação e papéis, as proteções do último
 proprietário, o fechamento de sessões ao desativar ou trocar a senha, o 2FA por usuário e o autor
-na auditoria.
+na auditoria. O mapa ao vivo cobre o parser do `.map`, a codificação PNG, o cache em disco, a
+ingestão com token válido/inválido, os bounds, o rate limit e o ciclo do plugin companion.
 
 ## Roadmap
 
@@ -567,6 +599,7 @@ na auditoria.
 - **Fase 5:** ~~reinício agendado com avisos~~ ✔, ~~atualização agendada~~ ✔, ~~anúncios recorrentes com rotação~~ ✔
 - **Fase 6:** ~~tempo de jogo e heatmap de atividade~~ ✔, ~~ranking e retenção~~ ✔, ~~perfil enriquecido~~ ✔, ~~alertas de jogador novo/inativo/pico~~ ✔, ~~exportação CSV~~ ✔
 - **Fase 7:** ~~usuários no SQLite com scrypt por usuário~~ ✔, ~~papéis owner/admin/viewer~~ ✔, ~~sessão vinculada ao usuário~~ ✔, ~~2FA por usuário com reset pelo owner~~ ✔, ~~tela de usuários~~ ✔, ~~auditoria com autor~~ ✔, ~~migração da credencial antiga~~ ✔
+- **Fase 8:** ~~render offline do `.map` em PNG~~ ✔, ~~plugin companion Oxide~~ ✔, ~~aba Mapa com zoom, pan e SSE~~ ✔, ~~token de ingestão por servidor~~ ✔, ~~testes do parser, PNG e ingestão~~ ✔
 
 > Projeto independente, não afiliado à Facepunch Studios. Não redistribui binários do jogo:
 > apenas automatiza o SteamCMD.

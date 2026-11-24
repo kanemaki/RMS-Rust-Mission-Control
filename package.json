@@ -9,5 +9,8 @@
     "dev": "npm --prefix agent run dev",
     "test": "npm --prefix agent test",
     "install:all": "npm --prefix agent install && npm --prefix web install"
+  },
+  "dependencies": {
+    "lz4js": "^0.2.0"
   }
 }

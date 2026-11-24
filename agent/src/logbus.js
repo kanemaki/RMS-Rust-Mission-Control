@@ -33,6 +33,10 @@ class LogBus extends EventEmitter {
     this.emit('event', { type: 'chat', serverId, entry });
   }
 
+  positions(serverId, state) {
+    this.emit('event', { type: 'positions', serverId, state });
+  }
+
   history(serverId, limit = 300) {
     const buffer = this.buffers.get(serverId) ?? [];
     return buffer.slice(-Math.min(Math.max(limit, 1), this.limit));
