@@ -23,6 +23,7 @@ COPY agent/patches ./patches
 RUN npm ci --omit=dev
 
 COPY agent/src ./src
+COPY docs/openapi.json ./docs/openapi.json
 COPY --from=web-build /build/agent/public ./public
 
 # Dados (config.json com a senha, SQLite, logs, backups) fora do container,

@@ -135,6 +135,7 @@ Mutações exigem o cabeçalho `x-rmc-request: 1` (proteção CSRF). O papel `vi
 
 ```
 GET    /api/health
+GET    /api/openapi.json             especificação OpenAPI 3.1 (pública, somente leitura)
 GET    /api/setup
 POST   /api/setup                    { password } cria o proprietário
 POST   /api/auth/login               { username?, password } → sessão ou desafio 2FA
@@ -228,6 +229,25 @@ GET    /api/events                   SSE (status + logs + chat + positions)
 O lote (`/api/servers/batch`) executa a ação em paralelo e devolve o resultado por servidor
 (`results[].ok`/`error`) — uma falha não derruba as demais. O lote nunca roda a atualização
 automática do SteamCMD; para atualizar, use o `update` individual de cada servidor.
+
+## Documentação OpenAPI
+
+A especificação OpenAPI 3.1 fica em [`docs/openapi.json`](docs/openapi.json) e é servida sem
+autenticação em `GET /api/openapi.json` — somente leitura, sem dados de servidores nem segredos.
+
+Ela cobre as 79 operações, os esquemas de resposta, o papel mínimo de cada rota (`x-rmc-role`),
+a exigência de CSRF (`x-rmc-csrf`) e os três esquemas de segurança: cookie de sessão `rmc_session`,
+cabeçalho `x-rmc-request: 1` e token de ingestão `x-rmc-token`.
+
+Para explorar, importe o arquivo em <https://editor.swagger.io> ou aponte um cliente
+(Insomnia, Postman, `openapi-generator`) para `http://127.0.0.1:8090/api/openapi.json`.
+
+```bash
+curl -s http://127.0.0.1:8090/api/openapi.json | head -c 200
+```
+
+O teste `agent/test/openapi.test.js` falha se uma rota do `api.js` ficar sem documentação ou se
+algum `$ref` apontar para um componente inexistente.
 
 ## Jogadores, moderação e chat
 

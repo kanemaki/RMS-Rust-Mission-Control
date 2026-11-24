@@ -96,6 +96,9 @@ import {
   verifySecondFactor,
 } from './auth.js';
 import QRCode from 'qrcode';
+import fs from 'node:fs';
+import path from 'node:path';
+import { agentRoot, repoRoot } from './paths.js';
 
 export function createApi({ secureCookies = false, version = '0.1.0', port = 8090 } = {}) {
   const router = express.Router();
@@ -103,6 +106,28 @@ export function createApi({ secureCookies = false, version = '0.1.0', port = 809
 
   router.get('/health', (req, res) => {
     res.json({ ok: true, version, uptimeMs: Math.round(process.uptime() * 1000) });
+  });
+
+  // Especificação OpenAPI: pública e somente leitura, para clientes e geradores.
+  const openapiCandidates = [
+    process.env.RMC_OPENAPI_PATH,
+    path.join(repoRoot, 'docs', 'openapi.json'),
+    path.join(process.cwd(), 'docs', 'openapi.json'),
+    path.join(agentRoot, 'openapi.json'),
+  ].filter(Boolean);
+  let openapiBody = null;
+
+  router.get('/openapi.json', (req, res) => {
+    if (!openapiBody) {
+      const file = openapiCandidates.find((candidate) => fs.existsSync(candidate));
+      if (!file) {
+        res.status(404).json({ error: 'Especificação OpenAPI não encontrada.' });
+        return;
+      }
+      openapiBody = fs.readFileSync(file);
+    }
+    res.setHeader('Cache-Control', 'no-cache');
+    res.type('application/json').send(openapiBody);
   });
 
   router.get('/setup', (req, res) => {

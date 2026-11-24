@@ -1,0 +1,2819 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Rust Mission Control API",
+    "version": "0.1.0",
+    "summary": "API HTTP do agente local do painel Rust Mission Control.",
+    "description": "Especificação de todas as rotas do agente (`agent/src/api.js`).\n\nAutenticação: cookie de sessão `rmc_session` (ou `Authorization: Bearer <token>`), criado por `POST /auth/login`. Toda mutação autenticada exige o cabeçalho `x-rmc-request: 1` (proteção CSRF).\n\nPapéis: `viewer` só faz leitura; `admin` opera servidores, jogadores, automação e backups; `owner` também gerencia usuários e licença. Cada operação declara o papel mínimo em `x-rmc-role`.\n\nA rota `POST /ingest/positions` é pública e autenticada pelo token do servidor no cabeçalho `x-rmc-token`, não por sessão.\n\nEsta especificação é servida sem autenticação em `GET /api/openapi.json`.",
+    "contact": {
+      "name": "Rust Mission Control"
+    }
+  },
+  "servers": [
+    {
+      "url": "http://127.0.0.1:8090/api",
+      "description": "Agente local na porta padrão."
+    },
+    {
+      "url": "http://{host}:{port}/api",
+      "description": "Outra máquina ou porta (RMC_HOST e RMC_PORT).",
+      "variables": {
+        "host": { "default": "127.0.0.1" },
+        "port": { "default": "8090" }
+      }
+    }
+  ],
+  "tags": [
+    { "name": "Sistema", "description": "Saúde do agente e primeiro acesso." },
+    { "name": "Autenticação", "description": "Login, sessão e 2FA (TOTP)." },
+    { "name": "Usuários", "description": "Gestão de contas e papéis (owner)." },
+    { "name": "Licença", "description": "Licença offline assinada e modo somente leitura." },
+    { "name": "Descoberta", "description": "Varredura de instalações do Rust no disco." },
+    { "name": "Grupos", "description": "Agrupamento de servidores." },
+    { "name": "Servidores", "description": "Cadastro e ciclo de vida dos servidores." },
+    { "name": "Operação", "description": "Comandos, anúncios, logs e ações em lote." },
+    { "name": "Jogadores", "description": "Jogadores, sessões, notas e moderação." },
+    { "name": "Chat", "description": "Histórico do chat e filtro de palavras." },
+    { "name": "Mapa ao vivo", "description": "Render do .map, plugin companion e posições." },
+    { "name": "Ingestão", "description": "Recebimento de posições enviadas pelo plugin." },
+    { "name": "Inteligência", "description": "Tempo de jogo, heatmap, ranking e CSV." },
+    { "name": "Configuração", "description": "server.cfg e webhook do Discord." },
+    { "name": "Backups", "description": "Criação, listagem, restauração e remoção." },
+    { "name": "Métricas", "description": "Amostras de CPU, RAM, jogadores e estado." },
+    { "name": "Oxide", "description": "Instalação do Oxide e plugins." },
+    { "name": "Auditoria", "description": "Trilha de ações do painel." },
+    { "name": "Eventos", "description": "Stream SSE de status, logs, chat e posições." },
+    { "name": "Documentação", "description": "A própria especificação OpenAPI." }
+  ],
+  "security": [{ "sessionCookie": [] }],
+  "paths": {
+    "/health": {
+      "get": {
+        "tags": ["Sistema"],
+        "summary": "Estado do agente",
+        "description": "Rota pública usada pelo healthcheck do Docker. Não exige sessão.",
+        "operationId": "getHealth",
+        "security": [],
+        "x-rmc-role": "public",
+        "responses": {
+          "200": {
+            "description": "Agente no ar.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Health" } } }
+          }
+        }
+      }
+    },
+    "/setup": {
+      "get": {
+        "tags": ["Sistema"],
+        "summary": "Verifica se o primeiro acesso é necessário",
+        "operationId": "getSetup",
+        "security": [],
+        "x-rmc-role": "public",
+        "responses": {
+          "200": {
+            "description": "Estado do primeiro acesso.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SetupStatus" } } }
+          }
+        }
+      },
+      "post": {
+        "tags": ["Sistema"],
+        "summary": "Cria a senha do proprietário",
+        "description": "Só funciona enquanto não existe senha. Cria a sessão do usuário `owner` e devolve o cookie.",
+        "operationId": "postSetup",
+        "security": [],
+        "x-rmc-role": "public",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["password"],
+                "properties": { "password": { "type": "string", "minLength": 10 } }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Senha criada e sessão aberta.",
+            "headers": { "Set-Cookie": { "schema": { "type": "string" }, "description": "Cookie rmc_session." } },
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Ok" } } }
+          },
+          "409": { "$ref": "#/components/responses/Conflict" }
+        }
+      }
+    },
+    "/auth/login": {
+      "post": {
+        "tags": ["Autenticação"],
+        "summary": "Entra com usuário e senha",
+        "description": "Com 2FA ativo devolve `totpRequired: true` e um desafio de 5 minutos em vez do cookie. Limitado por IP.",
+        "operationId": "postLogin",
+        "security": [],
+        "x-rmc-role": "public",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["password"],
+                "properties": {
+                  "username": { "type": "string", "default": "owner" },
+                  "password": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Sessão aberta ou desafio de 2FA.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/LoginResponse" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "429": { "$ref": "#/components/responses/TooManyRequests" }
+        }
+      }
+    },
+    "/auth/login/totp": {
+      "post": {
+        "tags": ["Autenticação"],
+        "summary": "Conclui o login com o segundo fator",
+        "operationId": "postLoginTotp",
+        "security": [],
+        "x-rmc-role": "public",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["challenge", "code"],
+                "properties": {
+                  "challenge": { "type": "string" },
+                  "code": { "type": "string", "description": "Código TOTP de 6 dígitos ou código de recuperação XXXX-XXXX." }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Sessão aberta.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": { "ok": { "type": "boolean" }, "recovery": { "type": "boolean" } }
+                }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "429": { "$ref": "#/components/responses/TooManyRequests" }
+        }
+      }
+    },
+    "/auth/logout": {
+      "post": {
+        "tags": ["Autenticação"],
+        "summary": "Encerra a sessão",
+        "operationId": "postLogout",
+        "security": [],
+        "x-rmc-role": "public",
+        "x-rmc-csrf": false,
+        "responses": {
+          "200": {
+            "description": "Sessão encerrada.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Ok" } } }
+          }
+        }
+      }
+    },
+    "/auth/me": {
+      "get": {
+        "tags": ["Autenticação"],
+        "summary": "Sessão atual",
+        "operationId": "getMe",
+        "x-rmc-role": "viewer",
+        "responses": {
+          "200": {
+            "description": "Dados da sessão.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Session" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+    "/auth/totp": {
+      "get": {
+        "tags": ["Autenticação"],
+        "summary": "Status do 2FA do usuário",
+        "operationId": "getTotp",
+        "x-rmc-role": "viewer",
+        "responses": {
+          "200": {
+            "description": "Status do 2FA.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/TotpStatus" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+    "/auth/totp/setup": {
+      "post": {
+        "tags": ["Autenticação"],
+        "summary": "Inicia a configuração do 2FA",
+        "description": "Devolve o segredo, a URL otpauth e o QR em data URL. O 2FA só vale depois de `enable`.",
+        "operationId": "postTotpSetup",
+        "x-rmc-role": "viewer",
+        "x-rmc-csrf": true,
+        "responses": {
+          "200": {
+            "description": "Segredo e QR.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/TotpSetup" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+    "/auth/totp/enable": {
+      "post": {
+        "tags": ["Autenticação"],
+        "summary": "Confirma o 2FA e devolve os códigos de recuperação",
+        "operationId": "postTotpEnable",
+        "x-rmc-role": "viewer",
+        "x-rmc-csrf": true,
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "type": "object", "required": ["code"], "properties": { "code": { "type": "string" } } }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "2FA ativo.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": { "type": "boolean" },
+                    "recoveryCodes": { "type": "array", "items": { "type": "string" } }
+                  }
+                }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+    "/auth/totp/disable": {
+      "post": {
+        "tags": ["Autenticação"],
+        "summary": "Desativa o 2FA",
+        "description": "Exige a senha atual e um código válido.",
+        "operationId": "postTotpDisable",
+        "x-rmc-role": "viewer",
+        "x-rmc-csrf": true,
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["password", "code"],
+                "properties": { "password": { "type": "string" }, "code": { "type": "string" } }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "2FA desativado.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Ok" } } }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+    "/users": {
+      "get": {
+        "tags": ["Usuários"],
+        "summary": "Lista usuários",
+        "operationId": "getUsers",
+        "x-rmc-role": "owner",
+        "responses": {
+          "200": {
+            "description": "Usuários sem hash, salt ou segredo de 2FA.",
+            "content": {
+              "application/json": {
+                "schema": { "type": "array", "items": { "$ref": "#/components/schemas/User" } }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      },
+      "post": {
+        "tags": ["Usuários"],
+        "summary": "Cria um usuário",
+        "operationId": "postUser",
+        "x-rmc-role": "owner",
+        "x-rmc-csrf": true,
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/UserCreate" } } }
+        },
+        "responses": {
+          "201": {
+            "description": "Usuário criado.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/User" } } }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      }
+    },
+    "/users/{id}": {
+      "patch": {
+        "tags": ["Usuários"],
+        "summary": "Altera papel ou desativa um usuário",
+        "description": "O owner não pode alterar o próprio papel nem se desativar.",
+        "operationId": "patchUser",
+        "x-rmc-role": "owner",
+        "x-rmc-csrf": true,
+        "parameters": [{ "$ref": "#/components/parameters/UserId" }],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/UserUpdate" } } }
+        },
+        "responses": {
+          "200": {
+            "description": "Usuário atualizado.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/User" } } }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      },
+      "delete": {
+        "tags": ["Usuários"],
+        "summary": "Exclui um usuário",
+        "description": "O owner não pode excluir a própria conta.",
+        "operationId": "deleteUser",
+        "x-rmc-role": "owner",
+        "x-rmc-csrf": true,
+        "parameters": [{ "$ref": "#/components/parameters/UserId" }],
+        "responses": {
+          "200": {
+            "description": "Usuário excluído.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Ok" } } }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      }
+    },
+    "/users/{id}/password": {
+      "post": {
+        "tags": ["Usuários"],
+        "summary": "Redefine a senha de um usuário",
+        "description": "Derruba todas as sessões abertas daquele usuário.",
+        "operationId": "postUserPassword",
+        "x-rmc-role": "owner",
+        "x-rmc-csrf": true,
+        "parameters": [{ "$ref": "#/components/parameters/UserId" }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["password"],
+                "properties": { "password": { "type": "string", "minLength": 10 } }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Senha redefinida.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Ok" } } }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      }
+    },
+    "/users/{id}/totp/reset": {
+      "post": {
+        "tags": ["Usuários"],
+        "summary": "Reseta o 2FA de um usuário",
+        "operationId": "postUserTotpReset",
+        "x-rmc-role": "owner",
+        "x-rmc-csrf": true,
+        "parameters": [{ "$ref": "#/components/parameters/UserId" }],
+        "responses": {
+          "200": {
+            "description": "2FA removido.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/User" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      }
+    },
+    "/license": {
+      "get": {
+        "tags": ["Licença"],
+        "summary": "Estado da licença",
+        "description": "Leitura local do arquivo assinado; nenhuma chamada de rede.",
+        "operationId": "getLicense",
+        "x-rmc-role": "viewer",
+        "responses": {
+          "200": {
+            "description": "Estado atual.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/LicenseStatus" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      },
+      "post": {
+        "tags": ["Licença"],
+        "summary": "Aplica um JSON de licença assinado",
+        "operationId": "postLicense",
+        "x-rmc-role": "owner",
+        "x-rmc-csrf": true,
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "type": "object", "required": ["text"], "properties": { "text": { "type": "string" } } }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Licença aplicada.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/LicenseStatus" } } }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      },
+      "delete": {
+        "tags": ["Licença"],
+        "summary": "Remove a licença aplicada",
+        "operationId": "deleteLicense",
+        "x-rmc-role": "owner",
+        "x-rmc-csrf": true,
+        "responses": {
+          "200": {
+            "description": "Licença removida.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": { "type": "boolean" },
+                    "removed": { "type": "boolean" },
+                    "license": { "$ref": "#/components/schemas/LicenseStatus" }
+                  }
+                }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      }
+    },
+    "/discover": {
+      "get": {
+        "tags": ["Descoberta"],
+        "summary": "Pasta de instalação sugerida",
+        "operationId": "getDiscover",
+        "x-rmc-role": "viewer",
+        "responses": {
+          "200": {
+            "description": "Caminho detectado, vazio quando não há instalação.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": { "defaultInstallDir": { "type": "string" } }
+                }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      },
+      "post": {
+        "tags": ["Descoberta"],
+        "summary": "Varre uma pasta e lista identidades",
+        "operationId": "postDiscover",
+        "x-rmc-role": "admin",
+        "x-rmc-csrf": true,
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["installDir"],
+                "properties": { "installDir": { "type": "string" } }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Resultado da varredura.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DiscoverScan" } } }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      }
+    },
+    "/groups": {
+      "get": {
+        "tags": ["Grupos"],
+        "summary": "Lista grupos com contagem de servidores",
+        "operationId": "getGroups",
+        "x-rmc-role": "viewer",
+        "responses": {
+          "200": {
+            "description": "Grupos cadastrados.",
+            "content": {
+              "application/json": {
+                "schema": { "type": "array", "items": { "$ref": "#/components/schemas/Group" } }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      },
+      "post": {
+        "tags": ["Grupos"],
+        "summary": "Cria um grupo",
+        "operationId": "postGroup",
+        "x-rmc-role": "admin",
+        "x-rmc-csrf": true,
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["name"],
+                "properties": { "name": { "type": "string", "maxLength": 64 } }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Grupo criado.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Group" } } }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "409": { "$ref": "#/components/responses/Conflict" }
+        }
+      }
+    },
+    "/groups/{id}": {
+      "patch": {
+        "tags": ["Grupos"],
+        "summary": "Renomeia um grupo",
+        "operationId": "patchGroup",
+        "x-rmc-role": "admin",
+        "x-rmc-csrf": true,
+        "parameters": [{ "$ref": "#/components/parameters/GroupId" }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["name"],
+                "properties": { "name": { "type": "string", "maxLength": 64 } }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Grupo atualizado.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Group" } } }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "409": { "$ref": "#/components/responses/Conflict" }
+        }
+      },
+      "delete": {
+        "tags": ["Grupos"],
+        "summary": "Remove um grupo",
+        "description": "Os servidores do grupo ficam sem grupo.",
+        "operationId": "deleteGroup",
+        "x-rmc-role": "admin",
+        "x-rmc-csrf": true,
+        "parameters": [{ "$ref": "#/components/parameters/GroupId" }],
+        "responses": {
+          "200": {
+            "description": "Grupo removido.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Ok" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/servers": {
+      "get": {
+        "tags": ["Servidores"],
+        "summary": "Lista servidores com status do runtime",
+        "operationId": "getServers",
+        "x-rmc-role": "viewer",
+        "responses": {
+          "200": {
+            "description": "Servidores cadastrados.",
+            "content": {
+              "application/json": {
+                "schema": { "type": "array", "items": { "$ref": "#/components/schemas/ServerWithStatus" } }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      },
+      "post": {
+        "tags": ["Servidores"],
+        "summary": "Cadastra um servidor",
+        "operationId": "postServer",
+        "x-rmc-role": "admin",
+        "x-rmc-csrf": true,
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ServerInput" } } }
+        },
+        "responses": {
+          "201": {
+            "description": "Servidor criado.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ServerWithStatus" } } }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "409": { "$ref": "#/components/responses/Conflict" }
+        }
+      }
+    },
+    "/servers/{id}": {
+      "get": {
+        "tags": ["Servidores"],
+        "summary": "Detalhe de um servidor",
+        "operationId": "getServer",
+        "x-rmc-role": "viewer",
+        "parameters": [{ "$ref": "#/components/parameters/ServerId" }],
+        "responses": {
+          "200": {
+            "description": "Servidor e status.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ServerWithStatus" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      },
+      "patch": {
+        "tags": ["Servidores"],
+        "summary": "Altera um servidor",
+        "description": "Bloqueado durante um wipe agendado em andamento.",
+        "operationId": "patchServer",
+        "x-rmc-role": "admin",
+        "x-rmc-csrf": true,
+        "parameters": [{ "$ref": "#/components/parameters/ServerId" }],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ServerInput" } } }
+        },
+        "responses": {
+          "200": {
+            "description": "Servidor atualizado.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ServerWithStatus" } } }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "409": { "$ref": "#/components/responses/Conflict" }
+        }
+      },
+      "delete": {
+        "tags": ["Servidores"],
+        "summary": "Remove um servidor",
+        "description": "Para o processo e apaga o cadastro; os arquivos do servidor ficam no disco.",
+        "operationId": "deleteServer",
+        "x-rmc-role": "admin",
+        "x-rmc-csrf": true,
+        "parameters": [{ "$ref": "#/components/parameters/ServerId" }],
+        "responses": {
+          "200": {
+            "description": "Servidor removido.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Ok" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/servers/batch": {
+      "post": {
+        "tags": ["Operação"],
+        "summary": "Executa uma ação em vários servidores",
+        "description": "Roda em paralelo e devolve o resultado por servidor; uma falha não derruba o lote. Nunca roda atualização automática do SteamCMD. Máximo de 50 servidores.",
+        "operationId": "postServerBatch",
+        "x-rmc-role": "admin",
+        "x-rmc-csrf": true,
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/BatchRequest" } } }
+        },
+        "responses": {
+          "200": {
+            "description": "Resultado agregado do lote.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/BatchResult" } } }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      }
+    },
+    "/servers/{id}/start": {
+      "post": {
+        "tags": ["Operação"],
+        "summary": "Inicia o servidor",
+        "operationId": "postServerStart",
+        "x-rmc-role": "admin",
+        "x-rmc-csrf": true,
+        "parameters": [{ "$ref": "#/components/parameters/ServerId" }],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": { "skipUpdate": { "type": "boolean", "default": false } }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Status após o start.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ServerStatus" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "409": { "$ref": "#/components/responses/Conflict" }
+        }
+      }
+    },
+    "/servers/{id}/stop": {
+      "post": {
+        "tags": ["Operação"],
+        "summary": "Para o servidor",
+        "operationId": "postServerStop",
+        "x-rmc-role": "admin",
+        "x-rmc-csrf": true,
+        "parameters": [{ "$ref": "#/components/parameters/ServerId" }],
+        "responses": {
+          "200": {
+            "description": "Status após o stop.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ServerStatus" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/servers/{id}/restart": {
+      "post": {
+        "tags": ["Operação"],
+        "summary": "Reinicia o servidor",
+        "operationId": "postServerRestart",
+        "x-rmc-role": "admin",
+        "x-rmc-csrf": true,
+        "parameters": [{ "$ref": "#/components/parameters/ServerId" }],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": { "skipUpdate": { "type": "boolean", "default": false } }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Status após o restart.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ServerStatus" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "409": { "$ref": "#/components/responses/Conflict" }
+        }
+      }
+    },
+    "/servers/{id}/update": {
+      "post": {
+        "tags": ["Operação"],
+        "summary": "Atualiza os arquivos via SteamCMD",
+        "operationId": "postServerUpdate",
+        "x-rmc-role": "admin",
+        "x-rmc-csrf": true,
+        "parameters": [{ "$ref": "#/components/parameters/ServerId" }],
+        "responses": {
+          "200": {
+            "description": "Resultado do SteamCMD e status atual.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/UpdateResult" },
+                    {
+                      "type": "object",
+                      "properties": { "status": { "$ref": "#/components/schemas/ServerStatus" } }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "409": { "$ref": "#/components/responses/Conflict" }
+        }
+      }
+    },
+    "/servers/{id}/command": {
+      "post": {
+        "tags": ["Operação"],
+        "summary": "Envia um comando RCON",
+        "description": "Aceita até 500 caracteres, sem quebras de linha.",
+        "operationId": "postServerCommand",
+        "x-rmc-role": "admin",
+        "x-rmc-csrf": true,
+        "parameters": [{ "$ref": "#/components/parameters/ServerId" }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["command"],
+                "properties": { "command": { "type": "string", "maxLength": 500 } }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Resposta do RCON.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": { "response": { "type": "string" } }
+                }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "409": { "$ref": "#/components/responses/Conflict" }
+        }
+      }
+    },
+    "/servers/{id}/announce": {
+      "post": {
+        "tags": ["Operação"],
+        "summary": "Envia um anúncio agora",
+        "description": "Sem `message`, usa a próxima mensagem da rotação configurada.",
+        "operationId": "postServerAnnounce",
+        "x-rmc-role": "admin",
+        "x-rmc-csrf": true,
+        "parameters": [{ "$ref": "#/components/parameters/ServerId" }],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": { "message": { "type": ["string", "null"] } }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Mensagem enviada.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": { "type": "string" },
+                    "response": { "type": "string" }
+                  }
+                }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "409": { "$ref": "#/components/responses/Conflict" }
+        }
+      }
+    },
+    "/servers/{id}/logs": {
+      "get": {
+        "tags": ["Operação"],
+        "summary": "Histórico do console",
+        "description": "Buffer em memória do agente, do mais antigo para o mais novo.",
+        "operationId": "getServerLogs",
+        "x-rmc-role": "viewer",
+        "parameters": [
+          { "$ref": "#/components/parameters/ServerId" },
+          { "$ref": "#/components/parameters/Limit" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Linhas do console.",
+            "content": {
+              "application/json": {
+                "schema": { "type": "array", "items": { "$ref": "#/components/schemas/LogEntry" } }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/servers/{id}/players": {
+      "get": {
+        "tags": ["Jogadores"],
+        "summary": "Lista jogadores online e recentes",
+        "operationId": "getServerPlayers",
+        "x-rmc-role": "viewer",
+        "parameters": [
+          { "$ref": "#/components/parameters/ServerId" },
+          { "name": "search", "in": "query", "schema": { "type": "string" }, "description": "Filtra por nome ou SteamID." },
+          { "$ref": "#/components/parameters/Limit" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Jogadores separados em online e recentes.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PlayerList" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/servers/{id}/players/{steamId}": {
+      "get": {
+        "tags": ["Jogadores"],
+        "summary": "Perfil de um jogador",
+        "operationId": "getServerPlayer",
+        "x-rmc-role": "viewer",
+        "parameters": [
+          { "$ref": "#/components/parameters/ServerId" },
+          { "$ref": "#/components/parameters/SteamId" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Jogador com estatísticas.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PlayerDetail" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      },
+      "patch": {
+        "tags": ["Jogadores"],
+        "summary": "Salva a nota interna do jogador",
+        "operationId": "patchServerPlayer",
+        "x-rmc-role": "admin",
+        "x-rmc-csrf": true,
+        "parameters": [
+          { "$ref": "#/components/parameters/ServerId" },
+          { "$ref": "#/components/parameters/SteamId" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": { "note": { "type": "string", "maxLength": 500 } }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Nota salva.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "steamId": { "type": "string" },
+                    "note": { "type": "string" }
+                  }
+                }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/servers/{id}/moderation": {
+      "get": {
+        "tags": ["Jogadores"],
+        "summary": "Histórico de moderação",
+        "operationId": "getServerModeration",
+        "x-rmc-role": "viewer",
+        "parameters": [
+          { "$ref": "#/components/parameters/ServerId" },
+          { "name": "steamId", "in": "query", "schema": { "type": "string" }, "description": "Filtra por jogador." },
+          { "$ref": "#/components/parameters/Limit" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Ações registradas, da mais recente para a mais antiga.",
+            "content": {
+              "application/json": {
+                "schema": { "type": "array", "items": { "$ref": "#/components/schemas/ModerationEntry" } }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/servers/{id}/players/{steamId}/action": {
+      "post": {
+        "tags": ["Jogadores"],
+        "summary": "Aplica uma ação de moderação",
+        "description": "Com `sync: true` em um ban, replica o ban nos servidores do mesmo grupo (ou em todos os outros quando o servidor não tem grupo).",
+        "operationId": "postPlayerAction",
+        "x-rmc-role": "admin",
+        "x-rmc-csrf": true,
+        "parameters": [
+          { "$ref": "#/components/parameters/ServerId" },
+          { "$ref": "#/components/parameters/SteamId" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ModerationAction" } } }
+        },
+        "responses": {
+          "200": {
+            "description": "Resultado da ação e, quando pedido, o resumo do sync.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "response": { "type": "string" },
+                    "sync": { "$ref": "#/components/schemas/BanSync" }
+                  }
+                }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "409": { "$ref": "#/components/responses/Conflict" }
+        }
+      }
+    },
+    "/servers/{id}/chat": {
+      "get": {
+        "tags": ["Chat"],
+        "summary": "Histórico do chat",
+        "operationId": "getServerChat",
+        "x-rmc-role": "viewer",
+        "parameters": [
+          { "$ref": "#/components/parameters/ServerId" },
+          { "$ref": "#/components/parameters/Limit" },
+          {
+            "name": "flagged",
+            "in": "query",
+            "schema": { "type": "string", "enum": ["1"] },
+            "description": "Com `1`, devolve só as mensagens sinalizadas pelo filtro."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Mensagens em ordem cronológica.",
+            "content": {
+              "application/json": {
+                "schema": { "type": "array", "items": { "$ref": "#/components/schemas/ChatMessage" } }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      },
+      "post": {
+        "tags": ["Chat"],
+        "summary": "Fala no chat do servidor",
+        "description": "Envia `say <mensagem>` por RCON; até 200 caracteres.",
+        "operationId": "postServerChat",
+        "x-rmc-role": "admin",
+        "x-rmc-csrf": true,
+        "parameters": [{ "$ref": "#/components/parameters/ServerId" }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["message"],
+                "properties": { "message": { "type": "string", "maxLength": 200 } }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Resposta do RCON.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": { "response": { "type": "string" } }
+                }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "409": { "$ref": "#/components/responses/Conflict" }
+        }
+      }
+    },
+    "/servers/{id}/chat-filter": {
+      "get": {
+        "tags": ["Chat"],
+        "summary": "Configuração do filtro de chat",
+        "operationId": "getChatFilter",
+        "x-rmc-role": "viewer",
+        "parameters": [{ "$ref": "#/components/parameters/ServerId" }],
+        "responses": {
+          "200": {
+            "description": "Filtro atual.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ChatFilter" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      },
+      "put": {
+        "tags": ["Chat"],
+        "summary": "Salva o filtro de chat",
+        "description": "Até 50 palavras, cada uma com no máximo 40 caracteres; duplicatas são descartadas.",
+        "operationId": "putChatFilter",
+        "x-rmc-role": "admin",
+        "x-rmc-csrf": true,
+        "parameters": [{ "$ref": "#/components/parameters/ServerId" }],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ChatFilter" } } }
+        },
+        "responses": {
+          "200": {
+            "description": "Filtro salvo.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ChatFilter" } } }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/servers/{id}/map": {
+      "get": {
+        "tags": ["Mapa ao vivo"],
+        "summary": "Metadados do .map",
+        "description": "Lê o arquivo do mundo e devolve seed, tamanho, resolução e camadas. Em servidor remoto ou sem .map devolve `available: false`.",
+        "operationId": "getServerMap",
+        "x-rmc-role": "viewer",
+        "parameters": [{ "$ref": "#/components/parameters/ServerId" }],
+        "responses": {
+          "200": {
+            "description": "Metadados do mapa.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/MapMeta" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/servers/{id}/map.png": {
+      "get": {
+        "tags": ["Mapa ao vivo"],
+        "summary": "Terreno renderizado em PNG",
+        "description": "Render de 1024×1024 com cache em disco invalidado por mtime do .map e versão do render. Responde com ETag.",
+        "operationId": "getServerMapPng",
+        "x-rmc-role": "viewer",
+        "parameters": [{ "$ref": "#/components/parameters/ServerId" }],
+        "responses": {
+          "200": {
+            "description": "Imagem do terreno.",
+            "headers": {
+              "ETag": { "schema": { "type": "string" } },
+              "Cache-Control": { "schema": { "type": "string" } }
+            },
+            "content": { "image/png": { "schema": { "type": "string", "contentMediaType": "image/png" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/servers/{id}/live": {
+      "get": {
+        "tags": ["Mapa ao vivo"],
+        "summary": "Posições atuais e status do plugin",
+        "description": "Posições normalizadas em `mx`/`my` (0 a 1). `stale` fica verdadeiro quando o último lote passou da janela de validade.",
+        "operationId": "getServerLive",
+        "x-rmc-role": "viewer",
+        "parameters": [{ "$ref": "#/components/parameters/ServerId" }],
+        "responses": {
+          "200": {
+            "description": "Estado ao vivo.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/LiveState" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      },
+      "delete": {
+        "tags": ["Mapa ao vivo"],
+        "summary": "Limpa as posições em memória",
+        "operationId": "deleteServerLive",
+        "x-rmc-role": "admin",
+        "x-rmc-csrf": true,
+        "parameters": [{ "$ref": "#/components/parameters/ServerId" }],
+        "responses": {
+          "200": {
+            "description": "Posições limpas.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Ok" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/servers/{id}/live/plugin": {
+      "get": {
+        "tags": ["Mapa ao vivo"],
+        "summary": "Status do plugin companion",
+        "operationId": "getLivePlugin",
+        "x-rmc-role": "viewer",
+        "parameters": [{ "$ref": "#/components/parameters/ServerId" }],
+        "responses": {
+          "200": {
+            "description": "Status do plugin e URL do agente embutida nele.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/PluginStatus" },
+                    { "type": "object", "properties": { "agentUrl": { "type": "string", "format": "uri" } } }
+                  ]
+                }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      },
+      "post": {
+        "tags": ["Mapa ao vivo"],
+        "summary": "Instala ou reinstala o plugin companion",
+        "description": "Grava `Oxide/plugins/RmsLiveMap.cs` com a URL do agente e o token atuais. Só em servidor local.",
+        "operationId": "postLivePlugin",
+        "x-rmc-role": "admin",
+        "x-rmc-csrf": true,
+        "x-rmc-local-only": true,
+        "parameters": [{ "$ref": "#/components/parameters/ServerId" }],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "agentUrl": { "type": "string", "format": "uri" },
+                  "intervalSeconds": { "type": "integer", "minimum": 1, "maximum": 60 }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Plugin instalado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/PluginStatus" },
+                    { "type": "object", "properties": { "agentUrl": { "type": "string", "format": "uri" } } }
+                  ]
+                }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "409": { "$ref": "#/components/responses/Conflict" }
+        }
+      },
+      "delete": {
+        "tags": ["Mapa ao vivo"],
+        "summary": "Remove o plugin companion",
+        "operationId": "deleteLivePlugin",
+        "x-rmc-role": "admin",
+        "x-rmc-csrf": true,
+        "x-rmc-local-only": true,
+        "parameters": [{ "$ref": "#/components/parameters/ServerId" }],
+        "responses": {
+          "200": {
+            "description": "Plugin removido.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PluginStatus" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "409": { "$ref": "#/components/responses/Conflict" }
+        }
+      }
+    },
+    "/servers/{id}/live/token": {
+      "post": {
+        "tags": ["Mapa ao vivo"],
+        "summary": "Rotaciona o token de ingestão",
+        "description": "Gera um token novo e reescreve o plugin já instalado na hora, para ele não parar de autenticar.",
+        "operationId": "postLiveToken",
+        "x-rmc-role": "admin",
+        "x-rmc-csrf": true,
+        "parameters": [{ "$ref": "#/components/parameters/ServerId" }],
+        "responses": {
+          "200": {
+            "description": "Token novo e status do plugin.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "token": { "type": "string" },
+                    "plugin": { "$ref": "#/components/schemas/PluginStatus" }
+                  }
+                }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/ingest/positions": {
+      "post": {
+        "tags": ["Ingestão"],
+        "summary": "Recebe o lote de posições do plugin",
+        "description": "Autenticada pelo token do servidor (`x-rmc-token` ou `token` no corpo), não por sessão. Coordenadas fora dos bounds do mundo são descartadas sem derrubar o lote. Limitada a 240 lotes por minuto por servidor.",
+        "operationId": "postIngestPositions",
+        "security": [{ "ingestToken": [] }],
+        "x-rmc-role": "public",
+        "x-rmc-csrf": false,
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/IngestRequest" } } }
+        },
+        "responses": {
+          "200": {
+            "description": "Lote processado.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/IngestResult" } } }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "429": { "$ref": "#/components/responses/TooManyRequests" }
+        }
+      }
+    },
+    "/servers/{id}/insights": {
+      "get": {
+        "tags": ["Inteligência"],
+        "summary": "Tempo de jogo, heatmap, ranking e retenção",
+        "operationId": "getServerInsights",
+        "x-rmc-role": "viewer",
+        "parameters": [
+          { "$ref": "#/components/parameters/ServerId" },
+          {
+            "name": "days",
+            "in": "query",
+            "schema": { "type": "integer", "minimum": 1, "maximum": 365, "default": 30 }
+          },
+          {
+            "name": "inactiveDays",
+            "in": "query",
+            "schema": { "type": "integer", "minimum": 1, "maximum": 365 },
+            "description": "Janela de inatividade; padrão vem do cadastro do servidor."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Insights do período.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Insights" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/servers/{id}/export/players.csv": {
+      "get": {
+        "tags": ["Inteligência"],
+        "summary": "Exporta jogadores em CSV",
+        "operationId": "getPlayersCsv",
+        "x-rmc-role": "viewer",
+        "parameters": [{ "$ref": "#/components/parameters/ServerId" }],
+        "responses": {
+          "200": {
+            "description": "CSV com BOM UTF-8.",
+            "headers": {
+              "Content-Disposition": { "schema": { "type": "string" } }
+            },
+            "content": { "text/csv": { "schema": { "type": "string" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/servers/{id}/export/sessions.csv": {
+      "get": {
+        "tags": ["Inteligência"],
+        "summary": "Exporta sessões em CSV",
+        "operationId": "getSessionsCsv",
+        "x-rmc-role": "viewer",
+        "parameters": [{ "$ref": "#/components/parameters/ServerId" }],
+        "responses": {
+          "200": {
+            "description": "CSV com BOM UTF-8.",
+            "headers": {
+              "Content-Disposition": { "schema": { "type": "string" } }
+            },
+            "content": { "text/csv": { "schema": { "type": "string" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/servers/{id}/config": {
+      "get": {
+        "tags": ["Configuração"],
+        "summary": "Lê o server.cfg",
+        "description": "Valores com segredo (RCON) são omitidos. Só em servidor local.",
+        "operationId": "getServerConfig",
+        "x-rmc-role": "viewer",
+        "x-rmc-local-only": true,
+        "parameters": [{ "$ref": "#/components/parameters/ServerId" }],
+        "responses": {
+          "200": {
+            "description": "Caminho, existência e valores do server.cfg.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ServerConfig" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "409": { "$ref": "#/components/responses/Conflict" }
+        }
+      },
+      "put": {
+        "tags": ["Configuração"],
+        "summary": "Grava o server.cfg",
+        "description": "Valida cada chave contra o schema; chaves de boot (`+convar`) também atualizam o cadastro do servidor.",
+        "operationId": "putServerConfig",
+        "x-rmc-role": "admin",
+        "x-rmc-csrf": true,
+        "x-rmc-local-only": true,
+        "parameters": [{ "$ref": "#/components/parameters/ServerId" }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["values"],
+                "properties": { "values": { "type": "object", "additionalProperties": true } }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Configuração gravada.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ServerConfig" } } }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "409": { "$ref": "#/components/responses/Conflict" }
+        }
+      }
+    },
+    "/servers/{id}/discord/test": {
+      "post": {
+        "tags": ["Configuração"],
+        "summary": "Envia um alerta de teste ao Discord",
+        "operationId": "postDiscordTest",
+        "x-rmc-role": "admin",
+        "x-rmc-csrf": true,
+        "parameters": [{ "$ref": "#/components/parameters/ServerId" }],
+        "responses": {
+          "200": {
+            "description": "Mensagem enviada.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Ok" } } }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "502": { "$ref": "#/components/responses/BadGateway" }
+        }
+      }
+    },
+    "/servers/{id}/backups": {
+      "get": {
+        "tags": ["Backups"],
+        "summary": "Lista backups da identidade",
+        "operationId": "getBackups",
+        "x-rmc-role": "viewer",
+        "parameters": [{ "$ref": "#/components/parameters/ServerId" }],
+        "responses": {
+          "200": {
+            "description": "Backups do mais novo para o mais antigo.",
+            "content": {
+              "application/json": {
+                "schema": { "type": "array", "items": { "$ref": "#/components/schemas/Backup" } }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      },
+      "post": {
+        "tags": ["Backups"],
+        "summary": "Cria um backup agora",
+        "description": "Faz `save` por RCON quando o servidor está no ar e empacota a pasta da identidade em .tar.gz.",
+        "operationId": "postBackup",
+        "x-rmc-role": "admin",
+        "x-rmc-csrf": true,
+        "parameters": [{ "$ref": "#/components/parameters/ServerId" }],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": { "label": { "type": "string", "maxLength": 24, "default": "manual" } }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Backup criado.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Backup" } } }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/servers/{id}/backups/{name}/restore": {
+      "post": {
+        "tags": ["Backups"],
+        "summary": "Restaura um backup",
+        "description": "Guarda um backup de segurança `pre-restore` antes de sobrescrever a identidade.",
+        "operationId": "postBackupRestore",
+        "x-rmc-role": "admin",
+        "x-rmc-csrf": true,
+        "parameters": [
+          { "$ref": "#/components/parameters/ServerId" },
+          { "$ref": "#/components/parameters/BackupName" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Backup restaurado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "restored": { "type": "string" },
+                    "safetyBackup": { "type": ["string", "null"] }
+                  }
+                }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "409": { "$ref": "#/components/responses/Conflict" }
+        }
+      }
+    },
+    "/servers/{id}/backups/{name}": {
+      "delete": {
+        "tags": ["Backups"],
+        "summary": "Remove um backup",
+        "operationId": "deleteBackup",
+        "x-rmc-role": "admin",
+        "x-rmc-csrf": true,
+        "parameters": [
+          { "$ref": "#/components/parameters/ServerId" },
+          { "$ref": "#/components/parameters/BackupName" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Backup removido.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Ok" } } }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/servers/{id}/samples": {
+      "get": {
+        "tags": ["Métricas"],
+        "summary": "Amostras de CPU, RAM, jogadores e estado",
+        "description": "Sem `range`, devolve as últimas amostras cruas. Com `range` (24h, 7d ou 30d), devolve séries agregadas em buckets.",
+        "operationId": "getSamples",
+        "x-rmc-role": "viewer",
+        "parameters": [
+          { "$ref": "#/components/parameters/ServerId" },
+          {
+            "name": "range",
+            "in": "query",
+            "schema": { "type": "string", "enum": ["24h", "7d", "30d"] },
+            "description": "Janela agregada. Sem ele, a resposta é um array cru."
+          },
+          { "$ref": "#/components/parameters/Limit" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Amostras cruas (array) ou série agregada (objeto).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    { "type": "array", "items": { "$ref": "#/components/schemas/Sample" } },
+                    { "$ref": "#/components/schemas/SamplesRange" }
+                  ]
+                }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/servers/{id}/oxide": {
+      "get": {
+        "tags": ["Oxide"],
+        "summary": "Status da instalação do Oxide",
+        "operationId": "getOxide",
+        "x-rmc-role": "viewer",
+        "parameters": [{ "$ref": "#/components/parameters/ServerId" }],
+        "responses": {
+          "200": {
+            "description": "Instalação, contagem de plugins e pasta.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/OxideStatus" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/servers/{id}/oxide/install": {
+      "post": {
+        "tags": ["Oxide"],
+        "summary": "Instala ou atualiza o Oxide",
+        "description": "Exige o servidor parado. Baixa o pacote oficial e extrai na instalação.",
+        "operationId": "postOxideInstall",
+        "x-rmc-role": "admin",
+        "x-rmc-csrf": true,
+        "parameters": [{ "$ref": "#/components/parameters/ServerId" }],
+        "responses": {
+          "200": {
+            "description": "Resultado da instalação.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/OxideInstallResult" },
+                    { "type": "object", "properties": { "installed": { "type": "boolean" } } }
+                  ]
+                }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "409": { "$ref": "#/components/responses/Conflict" },
+          "502": { "$ref": "#/components/responses/BadGateway" }
+        }
+      }
+    },
+    "/servers/{id}/oxide/plugins": {
+      "get": {
+        "tags": ["Oxide"],
+        "summary": "Lista plugins instalados",
+        "description": "Lê o cabeçalho de cada .cs e marca `loaded` quando o servidor está no ar.",
+        "operationId": "getOxidePlugins",
+        "x-rmc-role": "viewer",
+        "parameters": [{ "$ref": "#/components/parameters/ServerId" }],
+        "responses": {
+          "200": {
+            "description": "Plugins encontrados.",
+            "content": {
+              "application/json": {
+                "schema": { "type": "array", "items": { "$ref": "#/components/schemas/OxidePlugin" } }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      },
+      "post": {
+        "tags": ["Oxide"],
+        "summary": "Instala um plugin por URL do uMod ou por conteúdo",
+        "description": "Informe `url` (download do uMod) ou `name` + `content` (upload de até 2 MB).",
+        "operationId": "postOxidePlugin",
+        "x-rmc-role": "admin",
+        "x-rmc-csrf": true,
+        "parameters": [{ "$ref": "#/components/parameters/ServerId" }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "url": { "type": "string", "format": "uri" },
+                  "name": { "type": "string" },
+                  "content": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Plugin gravado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "name": { "type": "string" },
+                    "path": { "type": "string" },
+                    "bytes": { "type": "integer" },
+                    "url": { "type": "string", "format": "uri" }
+                  }
+                }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "409": { "$ref": "#/components/responses/Conflict" }
+        }
+      }
+    },
+    "/servers/{id}/oxide/plugins/{name}": {
+      "delete": {
+        "tags": ["Oxide"],
+        "summary": "Remove um plugin",
+        "operationId": "deleteOxidePlugin",
+        "x-rmc-role": "admin",
+        "x-rmc-csrf": true,
+        "parameters": [
+          { "$ref": "#/components/parameters/ServerId" },
+          { "$ref": "#/components/parameters/PluginName" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Plugin removido.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Ok" } } }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/servers/{id}/oxide/plugins/{name}/config": {
+      "get": {
+        "tags": ["Oxide"],
+        "summary": "Lê a config do plugin",
+        "operationId": "getOxidePluginConfig",
+        "x-rmc-role": "viewer",
+        "parameters": [
+          { "$ref": "#/components/parameters/ServerId" },
+          { "$ref": "#/components/parameters/PluginName" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Caminho, existência e conteúdo bruto.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PluginConfig" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      },
+      "put": {
+        "tags": ["Oxide"],
+        "summary": "Grava a config do plugin",
+        "description": "Valida o JSON antes de escrever e devolve o conteúdo normalizado.",
+        "operationId": "putOxidePluginConfig",
+        "x-rmc-role": "admin",
+        "x-rmc-csrf": true,
+        "parameters": [
+          { "$ref": "#/components/parameters/ServerId" },
+          { "$ref": "#/components/parameters/PluginName" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["raw"],
+                "properties": { "raw": { "type": "string", "description": "JSON do plugin como texto." } }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Config gravada.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PluginConfig" } } }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/servers/{id}/oxide/plugins/{name}/{action}": {
+      "post": {
+        "tags": ["Oxide"],
+        "summary": "Carrega, descarrega ou recarrega um plugin",
+        "operationId": "postOxidePluginAction",
+        "x-rmc-role": "admin",
+        "x-rmc-csrf": true,
+        "parameters": [
+          { "$ref": "#/components/parameters/ServerId" },
+          { "$ref": "#/components/parameters/PluginName" },
+          {
+            "name": "action",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "enum": ["load", "unload", "reload"] }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Resposta do RCON.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": { "response": { "type": "string" } }
+                }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "409": { "$ref": "#/components/responses/Conflict" }
+        }
+      }
+    },
+    "/audit": {
+      "get": {
+        "tags": ["Auditoria"],
+        "summary": "Trilha de auditoria",
+        "operationId": "getAudit",
+        "x-rmc-role": "viewer",
+        "parameters": [{ "$ref": "#/components/parameters/Limit" }],
+        "responses": {
+          "200": {
+            "description": "Ações registradas, da mais recente para a mais antiga.",
+            "content": {
+              "application/json": {
+                "schema": { "type": "array", "items": { "$ref": "#/components/schemas/AuditEntry" } }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+    "/events": {
+      "get": {
+        "tags": ["Eventos"],
+        "summary": "Stream SSE do agente",
+        "description": "Envia `hello` com o status de todos os servidores e depois eventos `status`, `log`, `chat` e `positions`. Heartbeat de 25 s. Use `EventSource` com `withCredentials`.",
+        "operationId": "getEvents",
+        "x-rmc-role": "viewer",
+        "parameters": [
+          {
+            "name": "serverId",
+            "in": "query",
+            "schema": { "type": "string" },
+            "description": "Filtra os eventos de um servidor."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Stream `text/event-stream`.",
+            "content": { "text/event-stream": { "schema": { "type": "string" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+    "/openapi.json": {
+      "get": {
+        "tags": ["Documentação"],
+        "summary": "Esta especificação",
+        "description": "Rota pública, somente leitura. Não expõe dados de servidores nem segredos.",
+        "operationId": "getOpenapi",
+        "security": [],
+        "x-rmc-role": "public",
+        "responses": {
+          "200": {
+            "description": "Documento OpenAPI 3.1.",
+            "content": { "application/json": { "schema": { "type": "object" } } }
+          },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "sessionCookie": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "rmc_session",
+        "description": "Cookie de sessão criado por /auth/login ou /setup. Também aceito como `Authorization: Bearer <token>`."
+      },
+      "csrfHeader": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "x-rmc-request",
+        "description": "Obrigatório com o valor `1` em toda mutação autenticada por sessão."
+      },
+      "ingestToken": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "x-rmc-token",
+        "description": "Token por servidor gerado em /servers/{id}/live/token. Aceito também como campo `token` no corpo."
+      }
+    },
+    "parameters": {
+      "ServerId": {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "description": "Id do servidor (o mesmo da identidade).",
+        "schema": { "type": "string" }
+      },
+      "SteamId": {
+        "name": "steamId",
+        "in": "path",
+        "required": true,
+        "description": "SteamID64 do jogador.",
+        "schema": { "type": "string", "pattern": "^[0-9]{17}$" }
+      },
+      "UserId": {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "description": "Id numérico do usuário.",
+        "schema": { "type": "integer" }
+      },
+      "GroupId": {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "description": "Id do grupo.",
+        "schema": { "type": "string" }
+      },
+      "BackupName": {
+        "name": "name",
+        "in": "path",
+        "required": true,
+        "description": "Nome do arquivo .tar.gz.",
+        "schema": { "type": "string" }
+      },
+      "PluginName": {
+        "name": "name",
+        "in": "path",
+        "required": true,
+        "description": "Nome do plugin sem a extensão .cs.",
+        "schema": { "type": "string" }
+      },
+      "Limit": {
+        "name": "limit",
+        "in": "query",
+        "description": "Quantidade máxima de itens.",
+        "schema": { "type": "integer", "minimum": 1, "maximum": 1000 }
+      }
+    },
+    "responses": {
+      "BadRequest": {
+        "description": "Requisição inválida.",
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+      },
+      "Unauthorized": {
+        "description": "Sem sessão válida ou token recusado.",
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+      },
+      "Forbidden": {
+        "description": "Papel insuficiente, CSRF ausente ou licença em modo somente leitura.",
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+      },
+      "NotFound": {
+        "description": "Recurso não encontrado.",
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+      },
+      "Conflict": {
+        "description": "Estado atual impede a operação.",
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+      },
+      "TooManyRequests": {
+        "description": "Limite de tentativas ou de lotes excedido.",
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+      },
+      "BadGateway": {
+        "description": "Falha ao falar com um serviço externo.",
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+      }
+    },
+    "schemas": {
+      "Error": {
+        "type": "object",
+        "required": ["error"],
+        "properties": {
+          "error": { "type": "string" },
+          "role": { "type": "string", "description": "Papel exigido, quando a falha é de autorização." },
+          "license": { "$ref": "#/components/schemas/LicenseStatus" }
+        }
+      },
+      "Ok": {
+        "type": "object",
+        "required": ["ok"],
+        "properties": { "ok": { "type": "boolean" } }
+      },
+      "Health": {
+        "type": "object",
+        "properties": {
+          "ok": { "type": "boolean" },
+          "version": { "type": "string" },
+          "uptimeMs": { "type": "integer" }
+        }
+      },
+      "SetupStatus": {
+        "type": "object",
+        "properties": { "needsSetup": { "type": "boolean" } }
+      },
+      "LoginResponse": {
+        "type": "object",
+        "properties": {
+          "ok": { "type": "boolean" },
+          "totpRequired": { "type": "boolean" },
+          "challenge": { "type": "string", "description": "Presente quando totpRequired é verdadeiro." },
+          "expiresAt": { "type": "integer", "description": "Epoch em ms do desafio ou da sessão." }
+        }
+      },
+      "Session": {
+        "type": "object",
+        "properties": {
+          "authenticated": { "type": "boolean" },
+          "id": { "type": "integer" },
+          "username": { "type": "string" },
+          "role": { "type": "string", "enum": ["owner", "admin", "viewer"] },
+          "expiresAt": { "type": "integer" },
+          "totpEnabled": { "type": "boolean" }
+        }
+      },
+      "TotpStatus": {
+        "type": "object",
+        "properties": {
+          "enabled": { "type": "boolean" },
+          "enabledAt": { "type": ["integer", "null"] },
+          "recoveryCodesLeft": { "type": "integer" }
+        }
+      },
+      "TotpSetup": {
+        "type": "object",
+        "properties": {
+          "secret": { "type": "string" },
+          "otpauth": { "type": "string" },
+          "qr": { "type": "string", "description": "PNG em data URL." }
+        }
+      },
+      "User": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer" },
+          "username": { "type": "string" },
+          "role": { "type": "string", "enum": ["owner", "admin", "viewer"] },
+          "disabled": { "type": "boolean" },
+          "createdAt": { "type": "integer" },
+          "lastLoginAt": { "type": ["integer", "null"] },
+          "totpEnabled": { "type": "boolean" }
+        }
+      },
+      "UserCreate": {
+        "type": "object",
+        "required": ["username", "password"],
+        "properties": {
+          "username": { "type": "string", "minLength": 3, "maxLength": 32 },
+          "password": { "type": "string", "minLength": 10 },
+          "role": { "type": "string", "enum": ["owner", "admin", "viewer"], "default": "viewer" }
+        }
+      },
+      "UserUpdate": {
+        "type": "object",
+        "properties": {
+          "role": { "type": "string", "enum": ["owner", "admin", "viewer"] },
+          "disabled": { "type": "boolean" }
+        }
+      },
+      "Trial": {
+        "type": "object",
+        "properties": {
+          "days": { "type": "integer" },
+          "startedAt": { "type": ["integer", "null"] },
+          "endsAt": { "type": ["integer", "null"] },
+          "daysLeft": { "type": "integer" },
+          "active": { "type": "boolean" }
+        }
+      },
+      "LicenseStatus": {
+        "type": "object",
+        "properties": {
+          "checkedAt": { "type": "integer" },
+          "state": { "type": "string", "enum": ["none", "trial", "active", "expired", "invalid"] },
+          "licensed": { "type": "boolean" },
+          "readOnly": { "type": "boolean" },
+          "licensee": { "type": ["string", "null"] },
+          "licenseId": { "type": ["string", "null"] },
+          "plan": { "type": ["string", "null"] },
+          "maxServers": { "type": ["integer", "null"] },
+          "issuedAt": { "type": ["string", "null"] },
+          "expiresAt": { "type": ["string", "null"] },
+          "daysLeft": { "type": ["integer", "null"] },
+          "error": { "type": ["string", "null"] },
+          "trial": { "$ref": "#/components/schemas/Trial" }
+        }
+      },
+      "DiscoverIdentity": {
+        "type": "object",
+        "properties": {
+          "identity": { "type": "string" },
+          "configPath": { "type": "string" },
+          "hasConfig": { "type": "boolean" },
+          "hasSave": { "type": "boolean" },
+          "values": { "type": "object", "additionalProperties": true }
+        }
+      },
+      "DiscoverScan": {
+        "type": "object",
+        "properties": {
+          "installDir": { "type": "string" },
+          "executable": { "type": ["string", "null"] },
+          "installed": { "type": "boolean" },
+          "identities": { "type": "array", "items": { "$ref": "#/components/schemas/DiscoverIdentity" } }
+        }
+      },
+      "Group": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string" },
+          "count": { "type": "integer", "description": "Servidores no grupo." }
+        }
+      },
+      "ServerInput": {
+        "type": "object",
+        "description": "Campos aceitos no cadastro. No PATCH, envie só o que muda.",
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string" },
+          "identity": { "type": "string", "pattern": "^[A-Za-z0-9_-]{1,32}$" },
+          "mode": { "type": "string", "enum": ["local", "remote"] },
+          "host": { "type": "string" },
+          "group": { "type": ["string", "null"] },
+          "installDir": { "type": "string" },
+          "steamCmdDir": { "type": "string" },
+          "executable": { "type": "string" },
+          "executableArgs": { "type": "array", "items": { "type": "string" } },
+          "oxide": { "type": "boolean" },
+          "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+          "rconPort": { "type": "integer", "minimum": 1, "maximum": 65535 },
+          "rconPassword": { "type": "string" },
+          "hostname": { "type": "string" },
+          "seed": { "type": "integer" },
+          "worldSize": { "type": "integer" },
+          "maxPlayers": { "type": "integer", "minimum": 1, "maximum": 500 },
+          "saveInterval": { "type": "integer", "minimum": 0 },
+          "autoUpdate": { "type": "boolean" },
+          "autoRestart": { "type": "boolean" },
+          "extraArgs": { "type": "array", "items": { "type": "string" } },
+          "wipeSchedule": { "$ref": "#/components/schemas/WipeSchedule" },
+          "backupSchedule": { "$ref": "#/components/schemas/BackupSchedule" },
+          "restartSchedule": { "$ref": "#/components/schemas/RestartSchedule" },
+          "updateSchedule": { "$ref": "#/components/schemas/UpdateSchedule" },
+          "announcements": { "$ref": "#/components/schemas/Announcements" },
+          "discord": { "$ref": "#/components/schemas/DiscordConfig" },
+          "chatFilter": { "$ref": "#/components/schemas/ChatFilter" },
+          "insights": { "type": "object", "properties": { "inactiveDays": { "type": "integer" } } },
+          "liveMap": { "$ref": "#/components/schemas/LiveMapConfig" }
+        }
+      },
+      "Server": {
+        "allOf": [
+          { "$ref": "#/components/schemas/ServerInput" },
+          {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "name": { "type": "string" },
+              "identity": { "type": "string" },
+              "mode": { "type": "string", "enum": ["local", "remote"] },
+              "host": { "type": "string" },
+              "group": { "type": ["string", "null"] },
+              "port": { "type": "integer" },
+              "rconPort": { "type": "integer" },
+              "rconPasswordSet": { "type": "boolean", "description": "A senha do RCON nunca é devolvida." },
+              "seed": { "type": "integer" },
+              "worldSize": { "type": "integer" },
+              "maxPlayers": { "type": "integer" }
+            }
+          }
+        ]
+      },
+      "ServerWithStatus": {
+        "allOf": [
+          { "$ref": "#/components/schemas/Server" },
+          { "type": "object", "properties": { "status": { "$ref": "#/components/schemas/ServerStatus" } } }
+        ]
+      },
+      "ServerStatus": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "mode": { "type": "string", "enum": ["local", "remote"] },
+          "host": { "type": "string" },
+          "state": {
+            "type": "string",
+            "enum": ["stopped", "starting", "running", "stopping", "updating", "error"]
+          },
+          "pid": { "type": ["integer", "null"] },
+          "startedAt": { "type": ["integer", "null"] },
+          "stoppedAt": { "type": ["integer", "null"] },
+          "uptimeMs": { "type": "integer" },
+          "uptimeSource": { "type": ["string", "null"], "enum": ["process", "session", "manual", null] },
+          "players": { "type": "integer" },
+          "playerNames": { "type": "array", "items": { "type": "string" } },
+          "maxPlayers": { "type": "integer" },
+          "rconConnected": { "type": "boolean" },
+          "lastError": { "type": ["string", "null"] },
+          "autoRestart": { "type": "boolean" },
+          "autoUpdate": { "type": "boolean" },
+          "nextWipeAt": { "type": ["integer", "null"] },
+          "nextBackupAt": { "type": ["integer", "null"] },
+          "nextRestartAt": { "type": ["integer", "null"] },
+          "nextUpdateAt": { "type": ["integer", "null"] },
+          "nextAnnouncementAt": { "type": ["integer", "null"] },
+          "install": {
+            "type": ["object", "null"],
+            "properties": {
+              "installed": { "type": "boolean" },
+              "executable": { "type": "string" },
+              "steamCmd": { "type": "boolean" }
+            }
+          }
+        }
+      },
+      "WipeSchedule": {
+        "type": "object",
+        "properties": {
+          "enabled": { "type": "boolean" },
+          "dayOfMonth": { "type": "integer", "minimum": 1, "maximum": 28 },
+          "time": { "type": "string", "pattern": "^[0-2][0-9]:[0-5][0-9]$" },
+          "type": { "type": "string", "enum": ["map", "bp", "full"] },
+          "rotateSeed": { "type": "boolean" }
+        }
+      },
+      "BackupSchedule": {
+        "type": "object",
+        "properties": {
+          "enabled": { "type": "boolean" },
+          "time": { "type": "string" },
+          "keep": { "type": "integer", "minimum": 1, "maximum": 100 }
+        }
+      },
+      "RestartSchedule": {
+        "type": "object",
+        "properties": {
+          "enabled": { "type": "boolean" },
+          "time": { "type": "string" },
+          "onlyIfEmpty": { "type": "boolean" }
+        }
+      },
+      "UpdateSchedule": {
+        "type": "object",
+        "properties": {
+          "enabled": { "type": "boolean" },
+          "time": { "type": "string" },
+          "restartAfter": { "type": "boolean" }
+        }
+      },
+      "Announcements": {
+        "type": "object",
+        "properties": {
+          "enabled": { "type": "boolean" },
+          "intervalMinutes": { "type": "integer", "minimum": 1 },
+          "messages": { "type": "array", "items": { "type": "string" } }
+        }
+      },
+      "DiscordConfig": {
+        "type": "object",
+        "properties": {
+          "enabled": { "type": "boolean" },
+          "events": { "type": "array", "items": { "type": "string" } },
+          "webhookSet": { "type": "boolean", "description": "A URL do webhook nunca é devolvida." }
+        }
+      },
+      "LiveMapConfig": {
+        "type": "object",
+        "properties": {
+          "enabled": { "type": "boolean" },
+          "token": { "type": ["string", "null"] },
+          "intervalSeconds": { "type": "integer", "minimum": 1, "maximum": 60 }
+        }
+      },
+      "BatchRequest": {
+        "type": "object",
+        "required": ["ids", "action"],
+        "properties": {
+          "ids": { "type": "array", "minItems": 1, "maxItems": 50, "items": { "type": "string" } },
+          "action": {
+            "type": "string",
+            "enum": ["start", "stop", "restart", "backup", "update", "announce"]
+          }
+        }
+      },
+      "BatchItem": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string" },
+          "ok": { "type": "boolean" },
+          "error": { "type": "string" },
+          "status": { "$ref": "#/components/schemas/ServerStatus" }
+        }
+      },
+      "BatchResult": {
+        "type": "object",
+        "properties": {
+          "action": { "type": "string" },
+          "total": { "type": "integer" },
+          "succeeded": { "type": "integer" },
+          "failed": { "type": "integer" },
+          "results": { "type": "array", "items": { "$ref": "#/components/schemas/BatchItem" } }
+        }
+      },
+      "UpdateResult": {
+        "type": "object",
+        "properties": {
+          "ok": { "type": "boolean" },
+          "code": { "type": ["integer", "null"] },
+          "output": { "type": "string" },
+          "durationMs": { "type": "integer" }
+        }
+      },
+      "LogEntry": {
+        "type": "object",
+        "properties": {
+          "ts": { "type": "integer" },
+          "serverId": { "type": "string" },
+          "stream": { "type": "string", "enum": ["stdout", "stderr", "agent"] },
+          "line": { "type": "string" }
+        }
+      },
+      "Player": {
+        "type": "object",
+        "properties": {
+          "steamId": { "type": "string" },
+          "name": { "type": "string" },
+          "online": { "type": "boolean" },
+          "onlineSince": { "type": ["integer", "null"] },
+          "firstSeen": { "type": ["integer", "null"] },
+          "lastSeen": { "type": ["integer", "null"] },
+          "sessionCount": { "type": "integer" },
+          "totalMs": { "type": "integer" },
+          "note": { "type": "string" },
+          "muted": { "type": "boolean" },
+          "banned": { "type": "boolean" }
+        }
+      },
+      "PlayerList": {
+        "type": "object",
+        "properties": {
+          "online": { "type": "array", "items": { "$ref": "#/components/schemas/Player" } },
+          "recent": { "type": "array", "items": { "$ref": "#/components/schemas/Player" } },
+          "total": { "type": "integer" }
+        }
+      },
+      "PlayerDetail": {
+        "allOf": [
+          { "$ref": "#/components/schemas/Player" },
+          {
+            "type": "object",
+            "properties": {
+              "sessions": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+              "stats": { "type": "object", "additionalProperties": true },
+              "moderation": {
+                "type": "array",
+                "items": { "$ref": "#/components/schemas/ModerationEntry" }
+              }
+            }
+          }
+        ]
+      },
+      "ModerationEntry": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer" },
+          "serverId": { "type": "string" },
+          "steamId": { "type": "string" },
+          "name": { "type": "string" },
+          "action": { "type": "string", "enum": ["kick", "ban", "unban", "mute", "unmute"] },
+          "reason": { "type": "string" },
+          "minutes": { "type": ["integer", "null"] },
+          "actor": { "type": "string" },
+          "createdAt": { "type": "integer" }
+        }
+      },
+      "ModerationAction": {
+        "type": "object",
+        "required": ["action"],
+        "properties": {
+          "action": { "type": "string", "enum": ["kick", "ban", "unban", "mute", "unmute"] },
+          "reason": { "type": "string", "maxLength": 200 },
+          "minutes": { "type": ["integer", "null"], "minimum": 1, "description": "Duração do ban ou mute; nulo é permanente." },
+          "sync": { "type": "boolean", "default": false, "description": "Replica o ban nos servidores do grupo." }
+        }
+      },
+      "BanSync": {
+        "type": "object",
+        "properties": {
+          "applied": { "type": "array", "items": { "type": "string" } },
+          "skipped": { "type": "array", "items": { "type": "string" } },
+          "failed": { "type": "array", "items": { "type": "string" } }
+        }
+      },
+      "ChatMessage": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer" },
+          "serverId": { "type": "string" },
+          "steamId": { "type": ["string", "null"] },
+          "name": { "type": "string" },
+          "message": { "type": "string" },
+          "channel": { "type": "string" },
+          "flagged": { "type": "boolean" },
+          "createdAt": { "type": "integer" }
+        }
+      },
+      "ChatFilter": {
+        "type": "object",
+        "properties": {
+          "enabled": { "type": "boolean" },
+          "words": { "type": "array", "maxItems": 50, "items": { "type": "string", "maxLength": 40 } }
+        }
+      },
+      "MapMeta": {
+        "type": "object",
+        "properties": {
+          "available": { "type": "boolean" },
+          "reason": { "type": "string" },
+          "file": { "type": "string" },
+          "bytes": { "type": "integer" },
+          "seed": { "type": ["integer", "null"] },
+          "worldSize": { "type": ["integer", "null"] },
+          "resolution": { "type": ["integer", "null"] },
+          "layers": { "type": "array", "items": { "type": "string" } },
+          "water": { "type": "boolean" },
+          "cached": { "type": "boolean" }
+        }
+      },
+      "LivePlayer": {
+        "type": "object",
+        "properties": {
+          "steamId": { "type": "string" },
+          "name": { "type": "string" },
+          "x": { "type": "number" },
+          "y": { "type": "number" },
+          "z": { "type": "number" },
+          "mx": { "type": "number", "minimum": 0, "maximum": 1 },
+          "my": { "type": "number", "minimum": 0, "maximum": 1 },
+          "hp": { "type": ["number", "null"] },
+          "updatedAt": { "type": "integer" }
+        }
+      },
+      "LiveState": {
+        "type": "object",
+        "properties": {
+          "enabled": { "type": "boolean" },
+          "intervalSeconds": { "type": "integer" },
+          "players": { "type": "array", "items": { "$ref": "#/components/schemas/LivePlayer" } },
+          "count": { "type": "integer" },
+          "receivedAt": { "type": ["integer", "null"] },
+          "stale": { "type": "boolean" },
+          "plugin": { "$ref": "#/components/schemas/PluginStatus" }
+        }
+      },
+      "PluginStatus": {
+        "type": "object",
+        "properties": {
+          "installed": { "type": "boolean" },
+          "active": { "type": "boolean" },
+          "path": { "type": ["string", "null"] },
+          "bytes": { "type": ["integer", "null"] },
+          "updatedAt": { "type": ["integer", "null"] },
+          "oxide": { "type": "boolean", "description": "Oxide presente na instalação." },
+          "tokenSet": { "type": "boolean" }
+        }
+      },
+      "IngestPosition": {
+        "type": "object",
+        "required": ["steamId", "x", "y", "z"],
+        "properties": {
+          "steamId": { "type": "string" },
+          "name": { "type": "string" },
+          "x": { "type": "number" },
+          "y": { "type": "number" },
+          "z": { "type": "number" },
+          "hp": { "type": ["number", "null"] }
+        }
+      },
+      "IngestRequest": {
+        "type": "object",
+        "required": ["positions"],
+        "properties": {
+          "token": { "type": "string", "description": "Alternativa ao cabeçalho x-rmc-token." },
+          "positions": {
+            "type": "array",
+            "maxItems": 500,
+            "items": { "$ref": "#/components/schemas/IngestPosition" }
+          }
+        }
+      },
+      "IngestResult": {
+        "type": "object",
+        "properties": {
+          "ok": { "type": "boolean" },
+          "accepted": { "type": "integer" },
+          "rejected": { "type": "integer" }
+        }
+      },
+      "Insights": {
+        "type": "object",
+        "properties": {
+          "days": { "type": "integer" },
+          "since": { "type": "integer" },
+          "until": { "type": "integer" },
+          "totals": {
+            "type": "object",
+            "properties": {
+              "players": { "type": "integer" },
+              "sessions": { "type": "integer" },
+              "playMs": { "type": "integer" },
+              "averageSessionMs": { "type": "integer" }
+            }
+          },
+          "heatmap": {
+            "type": "array",
+            "description": "Ocupação por dia da semana e hora.",
+            "items": { "type": "object", "additionalProperties": true }
+          },
+          "ranking": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "steamId": { "type": "string" },
+                "name": { "type": "string" },
+                "playMs": { "type": "integer" },
+                "sessions": { "type": "integer" },
+                "lastSeen": { "type": ["integer", "null"] }
+              }
+            }
+          },
+          "retention": { "type": "object", "additionalProperties": true },
+          "inactive": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/Player" }
+          }
+        }
+      },
+      "Sample": {
+        "type": "object",
+        "properties": {
+          "ts": { "type": "integer" },
+          "cpu": { "type": ["number", "null"] },
+          "memoryMb": { "type": ["number", "null"] },
+          "players": { "type": "integer" },
+          "state": { "type": "string" }
+        }
+      },
+      "SamplesRange": {
+        "type": "object",
+        "properties": {
+          "range": { "type": "string", "enum": ["24h", "7d", "30d"] },
+          "bucketMs": { "type": "integer" },
+          "since": { "type": "integer" },
+          "until": { "type": "integer" },
+          "samples": { "type": "array", "items": { "$ref": "#/components/schemas/Sample" } }
+        }
+      },
+      "ServerConfig": {
+        "type": "object",
+        "properties": {
+          "path": { "type": "string" },
+          "exists": { "type": "boolean" },
+          "values": { "type": "object", "additionalProperties": true }
+        }
+      },
+      "Backup": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "label": { "type": "string" },
+          "bytes": { "type": "integer" },
+          "createdAt": { "type": "integer" }
+        }
+      },
+      "OxideStatus": {
+        "type": "object",
+        "properties": {
+          "installed": { "type": "boolean" },
+          "pluginsDir": { "type": "string" },
+          "plugins": { "type": "integer" },
+          "version": { "type": ["string", "null"] }
+        }
+      },
+      "OxideInstallResult": {
+        "type": "object",
+        "properties": {
+          "ok": { "type": "boolean" },
+          "version": { "type": "string" },
+          "url": { "type": "string", "format": "uri" },
+          "bytes": { "type": "integer" }
+        }
+      },
+      "OxidePlugin": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "file": { "type": "string" },
+          "bytes": { "type": "integer" },
+          "updatedAt": { "type": "integer" },
+          "title": { "type": ["string", "null"] },
+          "version": { "type": ["string", "null"] },
+          "author": { "type": ["string", "null"] },
+          "loaded": { "type": "boolean" }
+        }
+      },
+      "PluginConfig": {
+        "type": "object",
+        "properties": {
+          "path": { "type": "string" },
+          "exists": { "type": "boolean" },
+          "raw": { "type": "string" },
+          "values": { "type": ["object", "null"], "additionalProperties": true }
+        }
+      },
+      "AuditEntry": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer" },
+          "action": { "type": "string" },
+          "actor": { "type": "string" },
+          "serverId": { "type": ["string", "null"] },
+          "detail": { "type": ["string", "null"] },
+          "ip": { "type": ["string", "null"] },
+          "createdAt": { "type": "integer" }
+        }
+      }
+    }
+  }
+}

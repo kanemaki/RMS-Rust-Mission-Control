@@ -138,6 +138,7 @@ Mutations require the `x-rmc-request: 1` header (CSRF protection). The `viewer` 
 
 ```
 GET    /api/health
+GET    /api/openapi.json             OpenAPI 3.1 spec (public, read-only)
 GET    /api/setup
 POST   /api/setup                    { password } creates the owner
 POST   /api/auth/login               { username?, password } → session or 2FA challenge
@@ -231,6 +232,25 @@ GET    /api/events                   SSE (status + logs + chat + positions)
 The batch endpoint (`/api/servers/batch`) runs the action in parallel and returns a per-server result
 (`results[].ok`/`error`) — one failure does not abort the others. The batch never runs the automatic
 SteamCMD update; to update, use each server's individual `update`.
+
+## OpenAPI documentation
+
+The OpenAPI 3.1 spec lives in [`docs/openapi.json`](docs/openapi.json) and is served without
+authentication at `GET /api/openapi.json` — read-only, with no server data or secrets.
+
+It covers all 79 operations, the response schemas, each route's minimum role (`x-rmc-role`),
+the CSRF requirement (`x-rmc-csrf`) and the three security schemes: the `rmc_session` session
+cookie, the `x-rmc-request: 1` header and the `x-rmc-token` ingest token.
+
+To explore it, import the file into <https://editor.swagger.io> or point a client
+(Insomnia, Postman, `openapi-generator`) at `http://127.0.0.1:8090/api/openapi.json`.
+
+```bash
+curl -s http://127.0.0.1:8090/api/openapi.json | head -c 200
+```
+
+The `agent/test/openapi.test.js` test fails when a route in `api.js` has no documentation or when
+a `$ref` points to a missing component.
 
 ## Players, moderation and chat
 
